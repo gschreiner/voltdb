@@ -586,7 +586,7 @@ public class TestAdHocQueries extends AdHocQueryTester {
             env.m_client.callProcedure("@AdHoc", "select\n* from blah;");
 
             // try a decimal calculation (ENG-1093)
-            modCount = env.m_client.callProcedure("@AdHoc", "INSERT INTO BLAH VALUES (?, ?, ?);", 2, "2011-06-24 10:30:26", 1.12345).getResults()[0];
+            modCount = env.m_client.callProcedure("@AdHoc", "INSERT INTO BLAH VALUES (?, ?, ?);", 2, "2011-06-24 10:30:26", "1.12").getResults()[0];
             assertEquals(1, modCount.getRowCount());
             assertEquals(1, modCount.asScalarLong());
             result = env.m_client.callProcedure("@AdHoc", "SELECT * FROM BLAH WHERE IVAL = ?;", 2).getResults()[0];
