@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -109,8 +109,11 @@ void MaterializedViewTriggerForWrite::setupMinMaxRecalculation(const catalog::Ca
     BOOST_FOREACH (LabeledStatement labeledStatement, fallbackQueryStmts) {
         int key = std::stoi(labeledStatement.first);
         catalog::Statement *stmt = labeledStatement.second;
+//        Topend* topEnd = engine->getTopend();
+//        VOLT_DEBUG("Getting plan for statement %s from engine %p with topend %p", stmt->sqltext().c_str(), engine, topEnd);
         const string& b64plan = stmt->fragments().begin()->second->plannodetree();
         const string jsonPlan = engine->getTopend()->decodeBase64AndDecompress(b64plan);
+//        VOLT_DEBUG("Getting plan %s from %p", jsonPlan.c_str(), engine);
 
         boost::shared_ptr<ExecutorVector> execVec = ExecutorVector::fromJsonPlan(engine, jsonPlan, -1);
         // We don't need the send executor.
@@ -304,7 +307,7 @@ NValue MaterializedViewTriggerForWrite::findMinMaxFallbackValueSequential(const 
     // loop through tuples to find the MIN / MAX
     TableTuple tuple(m_srcPersistentTable->schema());
     TableIterator iterator = m_srcPersistentTable->iterator();
-    VOLT_TRACE("Starting iteration on: %s\n", m_srcPersistentTable->debug().c_str());
+    VOLT_TRACE("Starting iteration on: %s\n", m_srcPersistentTable->debug("").c_str());
     while (iterator.next(tuple)) {
         // apply post filter
         VOLT_TRACE("Checking tuple: %s\n", tuple.debugNoHeader().c_str());
@@ -405,7 +408,13 @@ void MaterializedViewTriggerForWrite::processTupleDelete(const TableTuple &oldTu
     memset(m_updatedTuple.address(), 0, destTbl->getTupleLength());
 
     // obtain the current count of the number of tuples in the group
-    NValue count = m_existingTuple.getNValue((int) m_countStarColumnIndex).op_decrement();
+    NValue count;
+    if ((int) m_countStarColumnIndex == -1) {
+        assert(destTbl->schema()->hiddenColumnCount() == 1);
+        count = m_existingTuple.getHiddenNValue(0).op_decrement();
+    } else {
+        count = m_existingTuple.getNValue((int) m_countStarColumnIndex).op_decrement();
+    }
 
     // check if we should remove the tuple
     if (count.isZero()) {
@@ -501,7 +510,10 @@ void MaterializedViewTriggerForWrite::processTupleDelete(const TableTuple &oldTu
         VOLT_TRACE("updating matview tuple column %d\n", (int)(aggOffset+aggIndex));
         m_updatedTuple.setNValue(aggOffset+aggIndex, newValue);
     }
-
+    if (numCountStar == 0) {
+        assert(destTbl->schema()->hiddenColumnCount() == 1);
+        m_updatedTuple.setHiddenNValue(0, m_existingTuple.getHiddenNValue(0).op_decrement());
+    }
     // update the row
     // Shouldn't need to update group-key-only indexes such as the primary key
     // since their keys shouldn't ever change, but do update other indexes.

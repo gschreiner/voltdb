@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -51,7 +51,7 @@ public class MpTransactionTaskQueue extends TransactionTaskQueue
 
     MpTransactionTaskQueue(SiteTaskerQueue queue)
     {
-        super(queue);
+        super(queue, false);
     }
 
     void setMpRoSitePool(MpRoSitePool sitePool)
@@ -133,7 +133,8 @@ public class MpTransactionTaskQueue extends TransactionTaskQueue
                 if (!balanceSPI || readonly) {
                     MpTransactionState txn = (MpTransactionState)next.getTransactionState();
                     // inject poison pill
-                    FragmentTaskMessage dummy = new FragmentTaskMessage(0L, 0L, 0L, 0L, false, false, false);
+                    FragmentTaskMessage dummy = new FragmentTaskMessage(0L, 0L, 0L, 0L,
+                            false, false, false, txn.isNPartTxn(), txn.getTimetamp());
                     FragmentResponseMessage poison =
                             new FragmentResponseMessage(dummy, 0L); // Don't care about source HSID here
                     // Provide a TransactionRestartException which will be converted

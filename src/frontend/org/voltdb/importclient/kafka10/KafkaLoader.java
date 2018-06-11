@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -273,7 +273,12 @@ public class KafkaLoader implements ImporterLifecycle {
         config.setTopologyChangeAware(true);
         final Client client = ClientFactory.createClient(config);
         for (String host : hosts) {
-            client.createConnection(host);
+            try {
+                client.createConnection(host);
+            }catch (IOException e) {
+                // Only swallow exceptions caused by Java network or connection problem
+                // Unresolved hostname exceptions will be thrown
+            }
         }
         if (client.getConnectedHostList().isEmpty()) {
             try {

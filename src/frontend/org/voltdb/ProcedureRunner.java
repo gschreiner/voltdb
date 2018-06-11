@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -57,6 +57,7 @@ import org.voltdb.exceptions.SerializableException;
 import org.voltdb.exceptions.SpecifiedException;
 import org.voltdb.iv2.DeterminismHash;
 import org.voltdb.iv2.MpInitiator;
+import org.voltdb.iv2.MpTransactionState;
 import org.voltdb.iv2.Site;
 import org.voltdb.iv2.UniqueIdGenerator;
 import org.voltdb.jni.ExecutionEngine;
@@ -66,6 +67,7 @@ import org.voltdb.messaging.Iv2InitiateTaskMessage;
 import org.voltdb.planner.ActivePlanRepository;
 import org.voltdb.sysprocs.AdHocBase;
 import org.voltdb.sysprocs.AdHocNTBase;
+import org.voltdb.sysprocs.AdHoc_RO_SP;
 import org.voltdb.types.TimestampType;
 import org.voltdb.utils.CompressionService;
 import org.voltdb.utils.Encoder;
@@ -519,14 +521,6 @@ public class ProcedureRunner {
                 return false; // this will kick it back to CI for re-routing
             }
 
-            TheHashinator.HashinatorType hashinatorType = hashinator.getConfigurationType();
-            if (hashinatorType == TheHashinator.HashinatorType.LEGACY) {
-                // Legacy hashinator is not used for elastic, no need to check partitioning. In fact,
-                // since SP sysprocs all pass partitioning parameters as bytes,
-                // they will hash to different partitions using the legacy hashinator. So don't do it.
-                return true;
-            }
-
             if (m_site.getCorrespondingPartitionId() == MpInitiator.MP_INIT_PID) {
                 // SP txn misrouted to MPI, possible to happen during catalog update
                 throw new ExpectedProcedureException("Single-partition procedure routed to multi-partition initiator");
@@ -541,6 +535,13 @@ public class ProcedureRunner {
                 // ClientInterface should pre-validate this param is valid
                 parameterAtIndex = invocation.getParameterAtIndex(0);
                 parameterType = VoltType.get((Byte) invocation.getParameterAtIndex(1));
+
+                if (parameterAtIndex == null && m_isReadOnly) {
+                    assert (m_procedure instanceof AdHoc_RO_SP);
+                    // Replicated table reads can run on any partition, skip check
+                    return true;
+                }
+
             } else {
                 parameterType = m_partitionColumnType;
                 parameterAtIndex = invocation.getParameterAtIndex(m_partitionColumn);
@@ -862,7 +863,7 @@ public class ProcedureRunner {
     }
 
     public byte[] voltLoadTable(String clusterName, String databaseName,
-                    String tableName, VoltTable data, boolean returnUniqueViolations, boolean shouldDRStream)
+                    String tableName, VoltTable data, boolean returnUniqueViolations, boolean shouldDRStream, boolean undo)
                     throws VoltAbortException {
         if (data == null || data.getRowCount() == 0) {
             return null;
@@ -870,9 +871,14 @@ public class ProcedureRunner {
         try {
             return m_site.loadTable(m_txnState.txnId, m_txnState.m_spHandle, m_txnState.uniqueId,
                     clusterName, databaseName,
-                    tableName, data, returnUniqueViolations, shouldDRStream, false);
+                    tableName, data, returnUniqueViolations, shouldDRStream, undo);
         } catch (EEException e) {
-            throw new VoltAbortException("Failed to load table: " + tableName);
+            String msg = "Failed to load table \"" + tableName + "\"";
+            if (e.getMessage() != null) {
+                msg += ": " + e.getMessage();
+            }
+
+            throw new VoltAbortException(msg);
         }
     }
 
@@ -1397,7 +1403,7 @@ public class ProcedureRunner {
         final int m_batchSize;
 
         // needed to get various IDs
-        private final TransactionState m_txnState;
+        private final MpTransactionState m_txnState;
 
         // the set of dependency ids for the expected results of the batch
         // one per sql statment
@@ -1418,7 +1424,7 @@ public class ProcedureRunner {
         // holds query results
         final VoltTable[] m_results;
 
-        BatchState(int batchSize, TransactionState txnState, long siteId, boolean finalTask, String procedureName,
+        BatchState(int batchSize, MpTransactionState txnState, long siteId, boolean finalTask, String procedureName,
                 byte[] procToLoad, boolean perFragmentStatsRecording) {
             m_batchSize = batchSize;
             m_txnState = txnState;
@@ -1429,14 +1435,14 @@ public class ProcedureRunner {
 
             // the data and message for locally processed fragments
             m_localTask = new FragmentTaskMessage(m_txnState.initiatorHSId, siteId, m_txnState.txnId,
-                    m_txnState.uniqueId, m_txnState.isReadOnly(), false, txnState.isForReplay());
+                    m_txnState.uniqueId, m_txnState.isReadOnly(), false, txnState.isForReplay(), txnState.isNPartTxn(), txnState.getTimetamp());
             m_localTask.setProcedureName(procedureName);
             m_localTask.setBatchTimeout(m_txnState.getInvocation().getBatchTimeout());
             m_localTask.setPerFragmentStatsRecording(perFragmentStatsRecording);
 
             // the data and message for all sites in the transaction
             m_distributedTask = new FragmentTaskMessage(m_txnState.initiatorHSId, siteId, m_txnState.txnId,
-                    m_txnState.uniqueId, m_txnState.isReadOnly(), finalTask, txnState.isForReplay());
+                    m_txnState.uniqueId, m_txnState.isReadOnly(), finalTask, txnState.isForReplay(), txnState.isNPartTxn(), txnState.getTimetamp());
             m_distributedTask.setProcedureName(procedureName);
             // this works fine if procToLoad is NULL
             m_distributedTask.setProcNameToLoad(procToLoad);
@@ -1495,8 +1501,9 @@ public class ProcedureRunner {
      * Execute a batch of homogeneous queries, i.e. all reads or all writes.
      */
     VoltTable[] executeSlowHomogeneousBatch(final List<QueuedSQL> batch, final boolean finalTask) {
-
-        BatchState state = new BatchState(batch.size(), m_txnState, m_site.getCorrespondingSiteId(), finalTask,
+        MpTransactionState txnState = (MpTransactionState)m_txnState;
+        assert(txnState != null);
+        BatchState state = new BatchState(batch.size(), txnState, m_site.getCorrespondingSiteId(), finalTask,
                 m_procedureName, m_procNameToLoadForFragmentTasks, m_perCallStats.samplingStmts());
 
         // iterate over all sql in the batch, filling out the above data

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -74,7 +74,7 @@ public class HTTPClientInterface {
     public static final String PARAM_ADMIN = "admin";
     public static final String AUTH_USER_SESSION_KEY = "authuser";
     //Hidden property for session inactive timeout.
-    public static final int MAX_SESSION_INACTIVITY_SECONDS = Integer.getInteger("HTTP_SESSION_TIMEOUT_SECONDS", 10);
+    public static final int MAX_SESSION_INACTIVITY_SECONDS = Integer.getInteger("HTTP_SESSION_TIMEOUT_SECONDS", 30);
     //Hidden property for disable session management and use always auth mode.
     public static final boolean HTTP_DONT_USE_SESSION = Boolean.getBoolean("HTTP_DONT_USE_SESSION");
 

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -327,6 +327,24 @@ public class ClientResponseImpl implements ClientResponse, JSONString {
     public static boolean isTransactionallySuccessful(byte status) {
         return (status == SUCCESS) || (status == OPERATIONAL_FAILURE);
     }
+
+    public String toStatusJSONString() {
+        JSONStringer js = new JSONStringer();
+        try {
+            js.object();
+            js.keySymbolValuePair(JSON_STATUS_KEY, status);
+            js.keySymbolValuePair(JSON_APPSTATUS_KEY, appStatus);
+            js.keySymbolValuePair(JSON_STATUSSTRING_KEY, statusString);
+            js.keySymbolValuePair(JSON_APPSTATUSSTRING_KEY, appStatusString);
+            js.endObject();
+        }
+        catch (JSONException e) {
+            e.printStackTrace();
+            throw new RuntimeException("Failed to serialize a parameter set to JSON.", e);
+        }
+        return js.toString();
+    }
+
 
     @Override
     public String toJSONString() {

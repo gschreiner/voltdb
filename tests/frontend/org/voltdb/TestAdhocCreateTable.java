@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -76,6 +76,24 @@ public class TestAdhocCreateTable extends AdhocDDLTestBase {
                 threw = true;
             }
             assertTrue("Shouldn't have been able to create table FOO twice.", threw);
+
+            // make sure cannot create table with default value equals to minimum value
+            String[] testType = {"tinyint", "smallint", "integer", "bigint"};
+            String[] minVal = {"-128", "-32768", "-2147483648", "-9223372036854775808"};
+
+            for (int i = 0; i < testType.length; i++) {
+                threw = false;
+                try {
+                    m_client.callProcedure("@AdHoc",
+                            "create table t (c " + testType[i] + " default " + minVal[i] + ");");
+                }
+                catch (ProcCallException pce) {
+                    assertTrue(pce.getMessage().contains("data exception: numeric value out of range"));
+                    threw = true;
+                }
+                assertTrue("Creating numeric table column using the reserved minimum value as "
+                        + "default should throw an exception.", threw);
+            }
         }
         finally {
             teardownSystem();

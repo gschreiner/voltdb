@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -84,13 +84,14 @@ public:
         const std::vector<std::string> &columnNames,
         char *signature,
         bool tableIsMaterialized = false,
-        int partitionColumn = -1, // defaults provided for ease of testing.
+        int partitionColumn = 0, // defaults provided for ease of testing.
         bool exportEnabled = false,
         bool exportOnly = false,
         int tableAllocationTargetSize = 0,
         int tuplelimit = INT_MAX,
         int32_t compactionThreshold = 95,
-        bool drEnabled = false);
+        bool drEnabled = false,
+        bool isReplicated = false);
 
     static StreamedTable* getStreamedTableForTest(
                 voltdb::CatalogId databaseId,
@@ -131,6 +132,14 @@ public:
      * template table.
      */
     static TempTable* buildCopiedTempTable(
+        const std::string &name,
+        const Table* templateTable);
+
+    /**
+     * Creates an empty large temp table from the given
+     * template table.
+     */
+    static LargeTempTable* buildCopiedLargeTempTable(
         const std::string &name,
         const Table* templateTable);
 

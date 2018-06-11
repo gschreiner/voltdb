@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -37,6 +37,7 @@ enum VoltEEExceptionType {
     VOLT_EE_EXCEPTION_TYPE_SPECIFIED = 7,
     VOLT_EE_EXCEPTION_TYPE_GENERIC = 8,
     VOLT_EE_EXCEPTION_TYPE_TXN_MISPARTITIONED = 9,
+    VOLT_EE_EXCEPTION_TYPE_REPLICATED_TABLE = 10,
 };
 
 /*

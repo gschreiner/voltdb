@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -418,7 +418,7 @@ public class CoreUtils {
     };
 
     /**
-     * Get a single thread executor that caches it's thread meaning that the thread will terminate
+     * Get a single thread executor that caches its thread meaning that the thread will terminate
      * after keepAlive milliseconds. A new thread will be created the next time a task arrives and that will be kept
      * around for keepAlive milliseconds. On creation no thread is allocated, the first task creates a thread.
      *

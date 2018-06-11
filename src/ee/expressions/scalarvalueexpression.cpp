@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -18,9 +18,6 @@
 
 #include "expressions/scalarvalueexpression.h"
 #include "common/executorcontext.hpp"
-#include "common/ValuePeeker.hpp"
-#include "common/NValue.hpp"
-#include "common/tabletuple.h"
 #include "storage/table.h"
 #include "storage/tableiterator.h"
 
@@ -45,12 +42,13 @@ voltdb::NValue ScalarValueExpression::eval(const TableTuple *tuple1, const Table
     }
     TableIterator iterator = table->iterator();
     TableTuple tuple(table->schema());
+    voltdb::NValue rslt;
     if (iterator.next(tuple)) {
-        return tuple.getNValue(0);
+        rslt = tuple.getNValue(0);
     } else {
-        return NValue::getNullValue(m_left->getValueType());
+        rslt = NValue::getNullValue(m_left->getValueType());
     }
-
+    return rslt;
 }
 
 std::string ScalarValueExpression::debugInfo(const std::string &spacer) const {

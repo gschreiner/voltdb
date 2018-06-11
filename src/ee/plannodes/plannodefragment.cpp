@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -45,13 +45,11 @@
 
 #include <stdexcept>
 #include <sstream>
-#include <memory>
 
 #include <boost/foreach.hpp>
 
 #include "common/FatalException.hpp"
 #include "plannodefragment.h"
-#include "catalog/catalog.h"
 #include "abstractplannode.h"
 
 using namespace std;

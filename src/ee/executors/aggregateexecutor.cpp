@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -45,28 +45,11 @@
 
 #include "executors/aggregateexecutor.h"
 
-#include "common/ValueFactory.hpp"
-#include "common/common.h"
-#include "common/debuglog.h"
-#include "common/SerializableEEException.h"
-#include "execution/ExecutorVector.h"
-#include "expressions/abstractexpression.h"
 #include "plannodes/aggregatenode.h"
 #include "plannodes/limitnode.h"
 #include "storage/temptable.h"
-#include "storage/tableiterator.h"
 
-#include "boost/foreach.hpp"
-#include "boost/unordered_map.hpp"
 #include "hyperloglog/hyperloglog.hpp" // for APPROX_COUNT_DISTINCT
-
-#include <algorithm>
-#include <cmath>
-#include <limits>
-#include <set>
-#include <sstream>
-#include <stdint.h>
-#include <utility>
 
 namespace voltdb {
 /*

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -106,7 +106,7 @@ public class MaterializedViewProcessor {
             // parse the xml like any other sql statement
             ParsedSelectStmt stmt = null;
             try {
-                stmt = (ParsedSelectStmt) AbstractParsedStmt.parse(query, xmlquery, null, db, null);
+                stmt = (ParsedSelectStmt) AbstractParsedStmt.parse(null, query, xmlquery, null, db, null);
             }
             catch (Exception e) {
                 throw m_compiler.new VoltCompilerException(e.getMessage());
@@ -559,8 +559,10 @@ public class MaterializedViewProcessor {
             assert(outcol.expression.getArgs() == null || outcol.expression.getArgs().size() == 0);
         }
 
-        if (countStarFound == false) {
-            msg.append("must have count(*) after the GROUP BY columns (if any)");
+        // Users can create SINGLE TABLE VIEWS without declaring count(*) in the stmt.
+        // Multiple table views still need this restriction.
+        if (stmt.m_tableList.size() > 1 && countStarFound == false) {
+            msg.append("joins multiple tables, therefore must include COUNT(*) after any GROUP BY columns.");
             throw m_compiler.new VoltCompilerException(msg.toString());
         }
 
@@ -619,7 +621,9 @@ public class MaterializedViewProcessor {
             throw m_compiler.new VoltCompilerException(msg.toString());
         }
 
-        if (displayColCount <= groupColCount) {
+        // ENG-10892, since count(*) can be removed from SV table
+        if ((stmt.m_tableList.size() > 1 && displayColCount <= groupColCount) ||
+                displayColCount < groupColCount) {
             msg.append("has too few columns.");
             throw m_compiler.new VoltCompilerException(msg.toString());
         }

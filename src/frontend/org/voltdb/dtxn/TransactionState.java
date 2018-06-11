@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -52,6 +52,8 @@ public abstract class TransactionState extends OrderableTransaction  {
     // IZZY: make me protected/private
     public final long m_spHandle;
     private ArrayList<UndoAction> m_undoLog;
+    // This timestamp is only used for restarted transactions
+    protected long m_restartTimestamp = TransactionInfoBaseMessage.INITIAL_TIMESTAMP;
 
     /**
      * Set up the final member variables from the parameters. This will
@@ -209,5 +211,13 @@ public abstract class TransactionState extends OrderableTransaction  {
     }
 
     public void terminateTransaction() {
+    }
+
+    public void setTimestamp(long timestamp) {
+        m_restartTimestamp = timestamp;
+    }
+
+    public long getTimetamp() {
+        return m_restartTimestamp;
     }
 }

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -18,11 +18,11 @@
 #ifndef EXECUTETASK_H
 #define EXECUTETASK_H
 
-#include "common/UndoAction.h"
+#include "common/UndoReleaseAction.h"
 
 namespace voltdb {
 
-class ExecuteTaskUndoGenerateDREventAction : public voltdb::UndoAction {
+class ExecuteTaskUndoGenerateDREventAction : public voltdb::ReleaseOnlyAction {
 public:
     ExecuteTaskUndoGenerateDREventAction(
             AbstractDRTupleStream* drStream, AbstractDRTupleStream* drReplicatedStream,
@@ -38,8 +38,6 @@ public:
         , m_uniqueId(uniqueId)
         , m_payloads(payloads)
     { }
-
-    void undo() { }
 
     void release() {
         // TODO: skip generate DR_ELASTIC_REBALANCE event on replicated stream, remove this once the DR ReplicatedTable Stream has been removed

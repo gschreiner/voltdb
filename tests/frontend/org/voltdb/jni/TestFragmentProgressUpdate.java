@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -31,10 +31,9 @@ import java.util.Arrays;
 
 import org.mockito.Mockito;
 import org.voltcore.logging.VoltLogger;
-import org.voltdb.LegacyHashinator;
+import org.voltdb.ElasticHashinator;
 import org.voltdb.ParameterSet;
 import org.voltdb.TheHashinator.HashinatorConfig;
-import org.voltdb.TheHashinator.HashinatorType;
 import org.voltdb.VoltDB;
 import org.voltdb.VoltTable;
 import org.voltdb.VoltType;
@@ -599,8 +598,7 @@ public class TestFragmentProgressUpdate extends TestCase {
                 new VoltTable.ColumnInfo("I_PRICE", VoltType.FLOAT),
                 new VoltTable.ColumnInfo("I_DATA", VoltType.STRING)
                 );
-        TPCCProjectBuilder builder = new TPCCProjectBuilder();
-        m_catalog = builder.createTPCCSchemaCatalog();
+        m_catalog = TPCCProjectBuilder.getTPCCSchemaCatalog();
         Cluster cluster = m_catalog.getClusters().get("cluster");
         WAREHOUSE_TABLEID = m_catalog.getClusters().get("cluster").getDatabases().
                 get("database").getTables().get("WAREHOUSE").getRelativeIndex();
@@ -612,15 +610,16 @@ public class TestFragmentProgressUpdate extends TestCase {
                 CLUSTER_ID,
                 NODE_ID,
                 0,
+                1,
                 0,
                 "",
                 0,
                 64*1024,
                 100,
-                new HashinatorConfig(HashinatorType.LEGACY,
-                                     LegacyHashinator.getConfigureBytes(1),
+                new HashinatorConfig(ElasticHashinator.getConfigureBytes(1),
                                      0,
-                                     0), false);
+                                     0),
+                true);
     }
 
     @Override

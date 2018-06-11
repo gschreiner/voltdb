@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -35,6 +35,7 @@ import org.voltdb.SiteProcedureConnection;
 import org.voltdb.StoredProcedureInvocation;
 import org.voltdb.VoltTable;
 import org.voltdb.dtxn.TransactionState;
+import org.voltdb.exceptions.ReplicatedTableException;
 import org.voltdb.exceptions.SerializableException;
 import org.voltdb.exceptions.TransactionRestartException;
 import org.voltdb.exceptions.TransactionTerminationException;
@@ -45,10 +46,10 @@ import org.voltdb.messaging.FragmentTaskMessage;
 import org.voltdb.messaging.Iv2InitiateTaskMessage;
 import org.voltdb.utils.MiscUtils;
 import org.voltdb.utils.VoltTableUtil;
+import org.voltdb.utils.VoltTrace;
 
 import com.google_voltpatches.common.base.Preconditions;
 import com.google_voltpatches.common.collect.Maps;
-import org.voltdb.utils.VoltTrace;
 
 public class MpTransactionState extends TransactionState
 {
@@ -77,6 +78,8 @@ public class MpTransactionState extends TransactionState
     boolean m_haveDistributedInitTask = false;
     boolean m_isRestart = false;
     boolean m_fragmentRestarted = false;
+    final boolean m_nPartTxn;
+    boolean m_haveSentfragment = false;
 
     //Master change from MigratePartitionLeader. The remote dependencies are built before MigratePartitionLeader. After
     //fragment restart, the FragmentResponseMessage will come from the new partition master. The map is used to remove
@@ -89,7 +92,7 @@ public class MpTransactionState extends TransactionState
     MpTransactionState(Mailbox mailbox,
                        TransactionInfoBaseMessage notice,
                        List<Long> useHSIds, Map<Integer, Long> partitionMasters,
-                       long buddyHSId, boolean isRestart)
+                       long buddyHSId, boolean isRestart, boolean nPartTxn)
     {
         super(mailbox, notice);
         m_initiationMsg = (Iv2InitiateTaskMessage)notice;
@@ -97,6 +100,7 @@ public class MpTransactionState extends TransactionState
         m_masterHSIds.putAll(partitionMasters);
         m_buddyHSId = buddyHSId;
         m_isRestart = isRestart;
+        m_nPartTxn = nPartTxn;
     }
 
     public void updateMasters(List<Long> masters, Map<Integer, Long> partitionMasters)
@@ -122,6 +126,7 @@ public class MpTransactionState extends TransactionState
         // since some masters may not have seen it.
         m_haveDistributedInitTask = false;
         m_isRestart = true;
+        m_haveSentfragment = false;
     }
 
     @Override
@@ -176,8 +181,12 @@ public class MpTransactionState extends TransactionState
                 task.setStateForDurability((Iv2InitiateTaskMessage) getNotice(), m_masterHSIds.keySet());
             }
 
+            if (m_isRestart) {
+                task.setTimestamp(m_restartTimestamp);
+            }
             m_remoteWork = task;
             m_remoteWork.setTruncationHandle(m_initiationMsg.getTruncationHandle());
+            m_haveSentfragment = true;
             // Distribute fragments to remote destinations.
             long[] non_local_hsids = new long[m_useHSIds.size()];
             for (int i = 0; i < m_useHSIds.size(); i++) {
@@ -236,13 +245,16 @@ public class MpTransactionState extends TransactionState
                     m_localWork.getUniqueId(),
                     m_localWork.isReadOnly(),
                     false,
-                    false);
+                    false,
+                    m_nPartTxn,
+                    m_restartTimestamp);
             m_remoteWork.setEmptyForRestart(getNextDependencyId());
             if (!m_haveDistributedInitTask && !isForReplay() && !isReadOnly()) {
                 m_haveDistributedInitTask = true;
                 m_remoteWork.setStateForDurability((Iv2InitiateTaskMessage) getNotice(),
                         m_masterHSIds.keySet());
             }
+            m_haveSentfragment = true;
             // Distribute fragments to remote destinations.
             if (!m_useHSIds.isEmpty()) {
                 m_mbox.send(com.google_voltpatches.common.primitives.Longs.toArray(m_useHSIds), m_remoteWork);
@@ -264,6 +276,14 @@ public class MpTransactionState extends TransactionState
                     traceLog.add(() -> VoltTrace.endAsync("sendfragment",
                                                           MiscUtils.hsIdPairTxnIdToString(m_mbox.getHSId(), msg.m_sourceHSId, txnId, batchIdx),
                                                           "status", Byte.toString(msg.getStatusCode())));
+                }
+                // Filter out stale responses due to the transaction restart, normally the timestamp is Long.MIN_VALUE
+                if (m_restartTimestamp != msg.getRestartTimestamp()) {
+                    if (tmLog.isDebugEnabled()) {
+                        tmLog.debug("Receives unmatched fragment response, expect timestamp " + MpRestartSequenceGenerator.restartSeqIdToString(m_restartTimestamp) +
+                                " actually receives: " + msg);
+                    }
+                    continue;
                 }
                 boolean expectedMsg = handleReceivedFragResponse(msg);
                 if (expectedMsg) {
@@ -383,6 +403,11 @@ public class MpTransactionState extends TransactionState
     private void checkForException(FragmentResponseMessage msg)
     {
         if (msg.getStatusCode() != FragmentResponseMessage.SUCCESS) {
+            if (msg.getException() instanceof ReplicatedTableException) {
+                // There should be a real response from the thread that actually threw the real exception
+                // Ignore this exception in lieu of the real one.
+                return;
+            }
             setNeedsRollback(true);
             if (msg.getException() != null) {
                 throw msg.getException();
@@ -513,7 +538,8 @@ public class MpTransactionState extends TransactionState
         if (tmLog.isDebugEnabled()) {
             tmLog.debug("Aborting transaction: " + TxnEgo.txnIdToString(txnId));
         }
-        FragmentTaskMessage dummy = new FragmentTaskMessage(0L, 0L, 0L, 0L, false, false, false);
+        FragmentTaskMessage dummy = new FragmentTaskMessage(0L, 0L, 0L, 0L, false, false, false,
+                m_nPartTxn, m_restartTimestamp);
         FragmentResponseMessage poison = new FragmentResponseMessage(dummy, 0L);
         TransactionTerminationException termination = new TransactionTerminationException(
                 "Transaction interrupted.", txnId);
@@ -530,5 +556,15 @@ public class MpTransactionState extends TransactionState
         Preconditions.checkArgument(m_masterHSIds.values().containsAll(m_useHSIds) &&
                                     m_useHSIds.containsAll(m_masterHSIds.values()));
         return m_masterHSIds.get(partition);
+    }
+
+    public boolean isNPartTxn() {
+        return m_nPartTxn;
+    }
+
+    // Have MPI sent out at least one round of fragment to leaders?
+    // When MP txn is restarted, the flag is reset to false.
+    public boolean haveSentFragment() {
+        return m_haveSentfragment;
     }
 }

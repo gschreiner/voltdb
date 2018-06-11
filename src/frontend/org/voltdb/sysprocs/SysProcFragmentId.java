@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -221,4 +221,17 @@ public class SysProcFragmentId
     // @SwapTables
     public static final long PF_swapTables = 320;
     public static final long PF_swapTablesAggregate = 321;
+
+    // @PingPartitions
+    public static final long PF_pingPartitions = 330;
+    public static final long PF_pingPartitionsAggregate = 331;
+    public static final long PF_enableScoreboard = 332;
+    public static final long PF_enableScoreboardAggregate = 333;
+
+
+    public static boolean isEnableScoreboardFragment(byte[] planHash) {
+        long fragId = VoltSystemProcedure.hashToFragId(planHash);
+
+        return (fragId == PF_enableScoreboard);
+    }
 }

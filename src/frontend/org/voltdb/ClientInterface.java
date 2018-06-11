@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -90,16 +90,16 @@ import org.voltdb.client.ProcedureCallback;
 import org.voltdb.client.TLSHandshaker;
 import org.voltdb.common.Constants;
 import org.voltdb.dtxn.InitiatorStats.InvocationInfo;
-import org.voltdb.iv2.MigratePartitionLeaderInfo;
 import org.voltdb.iv2.Cartographer;
 import org.voltdb.iv2.Iv2Trace;
+import org.voltdb.iv2.MigratePartitionLeaderInfo;
 import org.voltdb.iv2.MpInitiator;
-import org.voltdb.messaging.MigratePartitionLeaderMessage;
 import org.voltdb.messaging.FastDeserializer;
 import org.voltdb.messaging.InitiateResponseMessage;
 import org.voltdb.messaging.Iv2EndOfLogMessage;
 import org.voltdb.messaging.Iv2InitiateTaskMessage;
 import org.voltdb.messaging.LocalMailbox;
+import org.voltdb.messaging.MigratePartitionLeaderMessage;
 import org.voltdb.security.AuthenticationRequest;
 import org.voltdb.utils.MiscUtils;
 import org.voltdb.utils.VoltTrace;
@@ -175,6 +175,9 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
     static final VoltLogger tmLog = new VoltLogger("TM");
 
     private static final RateLimitedLogger m_rateLimitedLogger =  new RateLimitedLogger(TimeUnit.MINUTES.toMillis(60), authLog, Level.WARN);
+
+    // Used by NT procedure to generate handle, don't use elsewhere.
+    public static final int NTPROC_JUNK_ID = -2;
 
     /** Ad hoc async work is either regular planning, ad hoc explain, or default proc explain. */
     public enum ExplainMode {
@@ -573,7 +576,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                 socket.socket().setTcpNoDelay(true);//Greatly speeds up requests hitting the wire
             }
 
-            if (remnant.hasRemaining() && remnant.remaining() <= 4 && remnant.getInt() < remnant.remaining()) {
+            if (remnant.hasRemaining() && (remnant.remaining() <= 4 || remnant.getInt() != remnant.remaining())) {
                 throw new IOException("SSL Handshake remnant is not a valid VoltDB message: " + remnant);
             }
 
@@ -1045,8 +1048,9 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
 
             try {
                 ProcedurePartitionInfo ppi = (ProcedurePartitionInfo)catProc.getAttachment();
-                int partition = InvocationDispatcher.getPartitionForProcedureParameter(ppi.index,
-                        ppi.type, response.getInvocation());
+                Object invocationParameter = response.getInvocation().getParameterAtIndex(ppi.index);
+                int partition = TheHashinator.getPartitionForParameter(
+                        ppi.type, invocationParameter);
                 m_dispatcher.createTransaction(cihm.connection.connectionId(),
                         response.getInvocation(),
                         catProc.getReadonly(),
@@ -1288,17 +1292,30 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
             JSONObject jsObj = new JSONObject(new String(message.m_payload, "UTF-8"));
             final int partitionId = jsObj.getInt(Cartographer.JSON_PARTITION_ID);
             final long initiatorHSId = jsObj.getLong(Cartographer.JSON_INITIATOR_HSID);
+            final boolean leaderMigration = jsObj.getBoolean(Cartographer.JSON_LEADER_MIGRATION);
             for (final ClientInterfaceHandleManager cihm : m_cihm.values()) {
                 try {
                     cihm.connection.queueTask(new Runnable() {
                         @Override
                         public void run() {
-                            failOverConnection(partitionId, initiatorHSId, cihm.connection);
+                            if (leaderMigration) {
+                                if (cihm.repairCallback != null) {
+                                    cihm.repairCallback.leaderMigrated(partitionId, initiatorHSId);
+                                }
+                            } else {
+                                failOverConnection(partitionId, initiatorHSId, cihm.connection);
+                            }
                         }
                     });
                 } catch (UnsupportedOperationException ignore) {
                     // In case some internal connections don't implement queueTask()
-                    failOverConnection(partitionId, initiatorHSId, cihm.connection);
+                    if (leaderMigration) {
+                        if (cihm.repairCallback != null) {
+                            cihm.repairCallback.leaderMigrated(partitionId, initiatorHSId);
+                        }
+                    } else {
+                        failOverConnection(partitionId, initiatorHSId, cihm.connection);
+                    }
                 }
             }
 

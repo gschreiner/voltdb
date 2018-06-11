@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -19,12 +19,15 @@
 #define VOLTDB_LARGETEMPTABLE_H
 
 #include "common/LargeTempTableBlockCache.h"
+#include "common/LargeTempTableBlockId.hpp"
+#include "executors/abstractexecutor.h"
 #include "storage/AbstractTempTable.hpp"
 #include "storage/tableiterator.h"
 
 namespace voltdb {
 
 class LargeTempTableBlock;
+class ProgressMonitorProxy;
 
 /**
  * A large temp table class that uses LargeTempTableCache to request
@@ -59,11 +62,7 @@ public:
 
     /** return an iterator that will automatically delete blocks after
         they are scanned. */
-    TableIterator iteratorDeletingAsWeGo() {
-        m_iter.reset(m_blockIds.begin());
-        m_iter.setTempTableDeleteAsGo(true);
-        return m_iter;
-    }
+    TableIterator iteratorDeletingAsWeGo();
 
     /** Delete all the tuples in this table */
     void deleteAllTuples(bool freeAllocatedStrings, bool fallible) {
@@ -84,6 +83,17 @@ public:
     /** To unpin the last written block when all inserts are
         complete. */
     virtual void finishInserts();
+
+    /**
+     * Sort this table using the given compare function.  Also apply
+     * the given limit and offset.
+     */
+    void sort(ProgressMonitorProxy *pmp, const AbstractExecutor::TupleComparer& comparer, int limit, int offset);
+
+    /** Releases the specified block.  Called by delete-as-you-go
+        iterators.  Returns an iterator pointing to the next block
+        id. */
+    virtual std::vector<LargeTempTableBlockId>::iterator releaseBlock(std::vector<LargeTempTableBlockId>::iterator it);
 
     /** Return the number of large temp table blocks used by this
         table */
@@ -125,13 +135,27 @@ public:
     /**
      * Swap the contents of this table with another.
      */
-    virtual void swapContents(AbstractTempTable* otherTable) {
-        // There is no reason that this can't be supported.  TODO: add
-        // support for this operation and related unit tests.  Things
-        // to think about: enforce restriction on pinned blocks, or
-        // whether or not table can be swapped if inserts are still
-        // ongoing?
-        throwSerializableEEException("swapContents not supported on large temp tables");
+    virtual void swapContents(AbstractTempTable* otherTable);
+
+    std::vector<LargeTempTableBlockId>& getBlockIds() {
+        return m_blockIds;
+    }
+
+    const std::vector<LargeTempTableBlockId>& getBlockIds() const {
+        return m_blockIds;
+    }
+
+    std::vector<LargeTempTableBlockId>::iterator disownBlock(std::vector<LargeTempTableBlockId>::iterator pos) {
+        LargeTempTableBlockCache* lttBlockCache = ExecutorContext::getExecutorContext()->lttBlockCache();
+        m_tupleCount -= lttBlockCache->getBlockTupleCount(*pos);
+        return m_blockIds.erase(pos);
+    }
+
+    void inheritBlock(LargeTempTableBlockId blockId) {
+        LargeTempTableBlockCache* lttBlockCache = ExecutorContext::getExecutorContext()->lttBlockCache();
+        m_tupleCount += lttBlockCache->getBlockTupleCount(blockId);
+        m_blockIds.push_back(blockId);
+
     }
 
 protected:
@@ -142,9 +166,7 @@ private:
 
     void getEmptyBlock();
 
-    std::vector<int64_t> m_blockIds;
-
-    TableIterator m_iter;
+    std::vector<LargeTempTableBlockId> m_blockIds;
 
     LargeTempTableBlock* m_blockForWriting;
 };

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -20,8 +20,6 @@
 #include "common/serializeio.h"
 #include "execution/VoltDBEngine.h"
 
-#include <stdint.h>
-
 namespace voltdb {
 
 #ifdef VOLT_DEBUG_ENABLED
@@ -38,6 +36,7 @@ static const char* translateVoltEEExceptionTypeToString(VoltEEExceptionType exce
     case VOLT_EE_EXCEPTION_TYPE_SPECIFIED: return "VOLT_EE_EXCEPTION_TYPE_SPECIFIED";
     case VOLT_EE_EXCEPTION_TYPE_GENERIC: return "VOLT_EE_EXCEPTION_TYPE_GENERIC";
     case VOLT_EE_EXCEPTION_TYPE_TXN_MISPARTITIONED: return "VOLT_EE_EXCEPTION_TYPE_TXN_MISPARTITIONED";
+    case VOLT_EE_EXCEPTION_TYPE_REPLICATED_TABLE: return "VOLT_EE_EXCEPTION_TYPE_REPLICATED_TABLE";
     default: return "UNKNOWN";
     }
 }

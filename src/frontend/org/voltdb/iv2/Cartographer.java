@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -17,6 +17,7 @@
 
 package org.voltdb.iv2;
 
+import java.util.AbstractMap;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -33,6 +34,7 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+
 import org.apache.zookeeper_voltpatches.CreateMode;
 import org.apache.zookeeper_voltpatches.KeeperException;
 import org.apache.zookeeper_voltpatches.ZooKeeper;
@@ -57,6 +59,7 @@ import org.voltdb.VoltType;
 import org.voltdb.VoltZK;
 import org.voltdb.VoltZK.MailboxType;
 import org.voltdb.iv2.LeaderCache.LeaderCallBackInfo;
+
 import com.google_voltpatches.common.base.Preconditions;
 import com.google_voltpatches.common.collect.ArrayListMultimap;
 import com.google_voltpatches.common.collect.ImmutableMap;
@@ -84,6 +87,7 @@ public class Cartographer extends StatsSource
 
     public static final String JSON_PARTITION_ID = "partitionId";
     public static final String JSON_INITIATOR_HSID = "initiatorHSId";
+    public static final String JSON_LEADER_MIGRATION = "leaderMigration";
 
     private final int m_configuredReplicationFactor;
     //partition masters by host
@@ -97,10 +101,6 @@ public class Cartographer extends StatsSource
     // local client interface so we can keep the CIs implementation
     private void sendLeaderChangeNotify(long hsId, int partitionId, boolean migratePartitionLeader)
     {
-        //do not notify the leader change because of MigratePartitionLeader to avoid intentional transaction drop
-        if (migratePartitionLeader) {
-            return;
-        }
         hostLog.info("[Cartographer] Sending leader change notification with new leader:" +
                 CoreUtils.hsIdToString(hsId) + " for partition:" + partitionId);
 
@@ -109,6 +109,7 @@ public class Cartographer extends StatsSource
             stringer.object();
             stringer.keySymbolValuePair(JSON_PARTITION_ID, partitionId);
             stringer.keySymbolValuePair(JSON_INITIATOR_HSID, hsId);
+            stringer.keySymbolValuePair(JSON_LEADER_MIGRATION, migratePartitionLeader);
             stringer.endObject();
             BinaryPayloadMessage bpm = new BinaryPayloadMessage(new byte[0], stringer.toString().getBytes("UTF-8"));
             int hostId = m_hostMessenger.getHostId();
@@ -400,10 +401,10 @@ public class Cartographer extends StatsSource
     }
 
     /**
-     * Convenient method, given a hostId, return the hostId of its buddies (including itself) which both
-     * belong to the same partition group.
+     * Convenient method, given a set of partitionIds, return the hostId of their partition group buddies.
+     *
      * @param partitions A list of partitions that to be assigned to the newly rejoined host
-     * @return A set of host IDs (includes the given hostId) that both belong to the same partition group
+     * @return A set of host IDs that both belong to the same partition group
      */
     public Set<Integer> findPartitionGroupPeers(List<Integer> partitions) {
         Set<Integer> hostIds = Sets.newHashSet();
@@ -414,6 +415,21 @@ public class Cartographer extends StatsSource
             hostIds.addAll(partitionByIds.get(p));
         }
         return hostIds;
+    }
+
+    /**
+     * @return a multi map of a pair of Partition to HSIDs to all Hosts
+     */
+    public Multimap<Integer, Entry<Integer,Long>> getHostToPartition2HSIdMap() {
+        Multimap<Integer, Entry<Integer,Long>> hostToHSId = ArrayListMultimap.create();
+        for (int pId : getPartitions()) {
+            if (pId == MpInitiator.MP_INIT_PID) {
+                continue;
+            }
+            List<Long> hsIDs = getReplicasForPartition(pId);
+            hsIDs.forEach(hsId -> hostToHSId.put(CoreUtils.getHostIdFromHSId(hsId),  new AbstractMap.SimpleEntry<>(pId, hsId)));
+        }
+        return hostToHSId;
     }
 
     /**
@@ -576,14 +592,14 @@ public class Cartographer extends StatsSource
         existingParts.remove(MpInitiator.MP_INIT_PID);
         int partsToAdd = newPartitionTotalCount - existingParts.size();
 
+        hostLog.info("Computing " + partsToAdd + " new partitions to add. Total partitions: " + newPartitionTotalCount);
         if (partsToAdd > 0) {
-            hostLog.info("Computing new partitions to add. Total partitions: " + newPartitionTotalCount);
             for (int i = 0; newPartitions.size() != partsToAdd; i++) {
                 if (!existingParts.contains(i)) {
                     newPartitions.add(i);
                 }
             }
-            hostLog.info("Adding " + partsToAdd + " partitions: " + newPartitions);
+            hostLog.info("Adding new partitions: " + newPartitions);
         }
         return newPartitions;
     }

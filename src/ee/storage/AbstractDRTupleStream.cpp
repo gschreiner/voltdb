@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -49,10 +49,10 @@ void AbstractDRTupleStream::setSecondaryCapacity(size_t capacity)
     m_secondaryCapacity = capacity;
 }
 
-void AbstractDRTupleStream::pushExportBuffer(StreamBlock *block, bool sync, bool endOfStream)
+void AbstractDRTupleStream::pushStreamBuffer(StreamBlock *block, bool sync)
 {
     if (sync) return;
-    int64_t rowTarget = ExecutorContext::getExecutorContext()->getTopend()->pushDRBuffer(m_partitionId, block);
+    int64_t rowTarget = ExecutorContext::getPhysicalTopend()->pushDRBuffer(m_partitionId, block);
     if (rowTarget >= 0) {
         m_rowTarget = rowTarget;
     }
@@ -84,8 +84,7 @@ void AbstractDRTupleStream::rollbackTo(size_t mark, size_t drRowCost)
     TupleStreamBase::rollbackTo(mark, drRowCost);
 }
 
-void
-AbstractDRTupleStream::periodicFlush(int64_t timeInMillis,
+void AbstractDRTupleStream::periodicFlush(int64_t timeInMillis,
                                      int64_t lastCommittedSpHandle)
 {
     // negative timeInMillis instructs a mandatory flush
@@ -151,7 +150,7 @@ void AbstractDRTupleStream::fatalDRErrorWithPoisonPill(int64_t spHandle, int64_t
     vsnprintf(reallysuperbig_failure_message, 8192, format, arg);
     va_end(arg);
     std::string failureMessageForVoltLogger = reallysuperbig_failure_message;
-    ExecutorContext::getExecutorContext()->getTopend()->pushPoisonPill(m_partitionId, failureMessageForVoltLogger, m_currBlock);
+    ExecutorContext::getPhysicalTopend()->pushPoisonPill(m_partitionId, failureMessageForVoltLogger, m_currBlock);
     m_currBlock = NULL;
     if (m_opened) {
         commitTransactionCommon();

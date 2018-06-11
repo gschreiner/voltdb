@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -17,15 +17,16 @@
 
 #ifndef TOPEND_H_
 #define TOPEND_H_
-#include "common/ids.h"
-#include "common/FatalException.hpp"
-#include "common/types.h"
-
 #include <string>
 #include <queue>
 #include <vector>
 #include <boost/shared_ptr.hpp>
 #include <boost/shared_array.hpp>
+
+#include "common/ids.h"
+#include "common/FatalException.hpp"
+#include "common/LargeTempTableBlockId.hpp"
+#include "common/types.h"
 
 namespace voltdb {
 class Table;
@@ -64,12 +65,13 @@ class Topend {
 
     virtual int64_t getQueuedExportBytes(int32_t partitionId, std::string signature) = 0;
     virtual void pushExportBuffer(
-            int64_t exportGeneration,
             int32_t partitionId,
             std::string signature,
             StreamBlock *block,
-            bool sync,
-            bool endOfStream) = 0;
+            bool sync) = 0;
+    virtual void pushEndOfStream(
+            int32_t partitionId,
+            std::string signature) = 0;
 
     virtual int64_t pushDRBuffer(int32_t partitionId, StreamBlock *block) = 0;
 
@@ -93,7 +95,7 @@ class Topend {
     virtual bool loadLargeTempTableBlock(LargeTempTableBlock* block) = 0;
 
     /** Delete any data for the specified block that is stored on disk. */
-    virtual bool releaseLargeTempTableBlock(int64_t blockId) = 0;
+    virtual bool releaseLargeTempTableBlock(LargeTempTableBlockId blockId) = 0;
 
     // Call into the Java top end to execute a user-defined function.
     // The function ID for the function to be called and the parameter data is stored in a
@@ -133,7 +135,8 @@ public:
 
     int64_t getQueuedExportBytes(int32_t partitionId, std::string signature);
 
-    virtual void pushExportBuffer(int64_t generation, int32_t partitionId, std::string signature, StreamBlock *block, bool sync, bool endOfStream);
+    virtual void pushExportBuffer(int32_t partitionId, std::string signature, StreamBlock *block, bool sync);
+    virtual void pushEndOfStream(int32_t partitionId, std::string signature);
 
     int64_t pushDRBuffer(int32_t partitionId, voltdb::StreamBlock *block);
 
@@ -153,7 +156,7 @@ public:
 
     virtual bool loadLargeTempTableBlock(LargeTempTableBlock* block);
 
-    virtual bool releaseLargeTempTableBlock(int64_t blockId);
+    virtual bool releaseLargeTempTableBlock(LargeTempTableBlockId blockId);
 
     int32_t callJavaUserDefinedFunction();
     void resizeUDFBuffer(int32_t size);

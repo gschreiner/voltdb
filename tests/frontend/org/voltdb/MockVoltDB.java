@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.zookeeper_voltpatches.CreateMode;
@@ -80,7 +81,7 @@ public class MockVoltDB implements VoltDBInterface
     final String m_clusterName = "cluster";
     final String m_databaseName = "database";
     StatsAgent m_statsAgent = null;
-    HostMessenger m_hostMessenger = new HostMessenger(new HostMessenger.Config(false), null);
+    HostMessenger m_hostMessenger = new HostMessenger(new HostMessenger.Config(false), null, null);
     private OperationMode m_mode = OperationMode.RUNNING;
     private volatile String m_localMetadata;
     final SnapshotCompletionMonitor m_snapshotCompletionMonitor = new SnapshotCompletionMonitor();
@@ -90,12 +91,14 @@ public class MockVoltDB implements VoltDBInterface
     long m_clusterCreateTime = 0;
     VoltDB.Configuration voltconfig = null;
     private final ListeningExecutorService m_es = MoreExecutors.listeningDecorator(CoreUtils.getSingleThreadExecutor("Mock Computation Service"));
+    private ScheduledThreadPoolExecutor m_periodicWorkThread = CoreUtils.getScheduledThreadPoolExecutor("Periodic Work", 1, CoreUtils.SMALL_STACK_SIZE);;
     public int m_hostId = 0;
     private SiteTracker m_siteTracker;
     private final Map<MailboxType, List<MailboxNodeContent>> m_mailboxMap =
             new HashMap<>();
     private boolean m_replicationActive = false;
     private CommandLog m_cl = null;
+    private int m_kfactor;
 
     public MockVoltDB() {
         this(VoltDB.DEFAULT_PORT, VoltDB.DEFAULT_ADMIN_PORT, -1, VoltDB.DEFAULT_DR_PORT);
@@ -493,7 +496,7 @@ public class MockVoltDB implements VoltDBInterface
     public CatalogContext catalogUpdate(String diffCommands,
             int expectedCatalogVersion, long genId,
             boolean isForReplay, boolean requireCatalogDiffCmdsApplyToEE,
-            boolean hasSchemaChange, boolean requiresNewExportGeneration)
+            boolean hasSchemaChange, boolean requiresNewExportGeneration,  boolean hasSecurityUserChange)
     {
         throw new UnsupportedOperationException("unimplemented");
     }
@@ -642,7 +645,11 @@ public class MockVoltDB implements VoltDBInterface
 
     @Override
     public ScheduledFuture<?> scheduleWork(Runnable work, long initialDelay, long delay, TimeUnit unit) {
-        return null;
+        if (delay > 0) {
+            return m_periodicWorkThread.scheduleWithFixedDelay(work, initialDelay, delay, unit);
+        } else {
+            return m_periodicWorkThread.schedule(work, initialDelay, unit);
+        }
     }
 
     @Override
@@ -797,7 +804,7 @@ public class MockVoltDB implements VoltDBInterface
     @Override
     public ScheduledFuture<?> schedulePriorityWork(Runnable work,
             long initialDelay, long delay, TimeUnit unit) {
-        return null;
+        return m_periodicWorkThread.scheduleWithFixedDelay(work, initialDelay, delay, unit);
     }
 
     @Override
@@ -856,7 +863,27 @@ public class MockVoltDB implements VoltDBInterface
     public void swapTables(String oneTable, String otherTable) {
     }
 
+    @Override
     public HTTPAdminListener getHttpAdminListener() {
         return null;
+    }
+
+    @Override
+    public long getLowestSiteId() {
+        return 0;
+    }
+
+    @Override
+    public int getLowestPartitionId() {
+        return 0;
+    }
+
+    @Override
+    public int getKFactor() {
+        return m_kfactor;
+    }
+
+    public void setKFactor(int kfactor) {
+        m_kfactor = kfactor;
     }
 }

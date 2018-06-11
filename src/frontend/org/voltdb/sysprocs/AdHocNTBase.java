@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -414,16 +414,17 @@ public abstract class AdHocNTBase extends UpdateApplicationBase {
     static CompletableFuture<ClientResponse> processExplainDefaultProc(AdHocPlannedStmtBatch planBatch) {
         Database db = VoltDB.instance().getCatalogContext().database;
 
-        // there better be one statement if this is really sql
+        // there better be one statement if this is really SQL
         // from a default procedure
         assert(planBatch.getPlannedStatementCount() == 1);
         AdHocPlannedStatement ahps = planBatch.getPlannedStatement(0);
         String sql = new String(ahps.sql, StandardCharsets.UTF_8);
         String explain = planBatch.explainStatement(0, db, false);
 
-        VoltTable vt = new VoltTable(new VoltTable.ColumnInfo( "SQL_STATEMENT", VoltType.STRING),
+        VoltTable vt = new VoltTable(new VoltTable.ColumnInfo("STATEMENT_NAME", VoltType.STRING),
+                new VoltTable.ColumnInfo( "SQL_STATEMENT", VoltType.STRING),
                 new VoltTable.ColumnInfo( "EXECUTION_PLAN", VoltType.STRING));
-        vt.addRow(sql, explain);
+        vt.addRow("sql0", sql, explain);
 
         ClientResponseImpl response =
                 new ClientResponseImpl(

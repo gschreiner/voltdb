@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -67,14 +67,6 @@ public class TestMaterializedViewSuite extends RegressionSuite {
     private static final int[] yesAndNo = new int[]{1, 0};
     private static final int[] never = new int[]{0};
 
-    // procedures used by these tests
-    static final Class<?>[] PROCEDURES = {
-        AddPerson.class, DeletePerson.class, UpdatePerson.class, AggAges.class,
-        SelectAllPeople.class, AggThings.class, AddThing.class, OverflowTest.class,
-        Eng798Insert.class, TruncateMatViewDataMP.class,
-        TruncateTables.class, TruncatePeople.class
-    };
-
     // For comparing tables with FLOAT columns
     private static final double EPSILON = 0.000001;
 
@@ -83,7 +75,6 @@ public class TestMaterializedViewSuite extends RegressionSuite {
     }
 
     private void truncateBeforeTest(Client client) {
-        // TODO Auto-generated method stub
         VoltTable[] results = null;
         try {
             results = client.callProcedure("TruncateMatViewDataMP").getResults();
@@ -2359,6 +2350,43 @@ public class TestMaterializedViewSuite extends RegressionSuite {
                 expectedMsg);
     }
 
+    public void testEng13694() throws Exception {
+        // We used to sometimes fail when updating a materialized view
+        // which was the join of a replicated table and a partitioned
+        // table.  This only happened with fairly large tables.
+        // We don't run this with valgrind.  It's too slow, and
+        // it's not likely to cause uncaught memory leaks anyway.
+        if (!isValgrind()) {
+            Client client = getClient();
+            final int num_prows = 10000;
+            final int num_rrows = 1000;
+            Long[][] prows = new Long[num_prows][2];
+            for (int idx = 0; idx < num_prows; idx += 1) {
+                prows[idx][0] = (long) idx;
+                prows[idx][1] = (long) (idx + 100);
+            }
+            Long[][] rrows = new Long[num_rrows][2];
+            for (int idx = 0; idx < num_rrows; idx +=1) {
+                rrows[idx][0] = (long) idx;
+                rrows[idx][1] = (long) (idx + 100);
+            }
+            shuffleArray(prows);
+            shuffleArray(rrows);
+            // Load up the P1 table.
+            for (int idx = 0; idx < num_prows; idx += 1) {
+                client.callProcedure("ENG13694_P1.insert", prows[idx][0], prows[idx][1]);
+            }
+            // Load up the R1 table.  This is where we expect a crash.
+            for (int idx = 0; idx < num_rrows; idx += 1) {
+                client.callProcedure("ENG13694_R1.insert", rrows[idx][0], rrows[idx][1]);
+            }
+            // Delete the R1 table.  We could see a crash here as well.
+            for (int idx = 0; idx < num_rrows; idx += 1) {
+                client.callProcedure("ENG13694_R1.delete", rrows[idx][0]);
+            }
+        }
+    }
+
     public void testEng11203() throws Exception {
         // This test case has AdHoc DDL, so it cannot be ran in the HSQL backend.
         if (! isHSQL()) {
@@ -2518,6 +2546,12 @@ public class TestMaterializedViewSuite extends RegressionSuite {
         assertContentOfTable(expectedAnswer, vt);
     }
 
+    // procedures used by these tests
+    static final Class<?>[] MP_PROCEDURES = {
+        AddThing.class, TruncateMatViewDataMP.class, AggThings.class,
+        TruncateTables.class, TruncatePeople.class
+    };
+
     /**
      * Build a list of the tests that will be run when TestMaterializedViewSuite gets run by JUnit.
      * Use helper classes that are part of the RegressionSuite framework.
@@ -2538,7 +2572,15 @@ public class TestMaterializedViewSuite extends RegressionSuite {
         String schemaPath = url.getPath();
         project.addSchema(schemaPath);
 
-        project.addProcedures(PROCEDURES);
+        project.addMultiPartitionProcedures(MP_PROCEDURES);
+
+        project.addProcedure(AddPerson.class, "PEOPLE.PARTITION: 0");
+        project.addProcedure(DeletePerson.class, "PEOPLE.PARTITION: 0");
+        project.addProcedure(UpdatePerson.class, "PEOPLE.PARTITION: 0");
+        project.addProcedure(AggAges.class, "PEOPLE.PARTITION: 0");
+        project.addProcedure(SelectAllPeople.class, "PEOPLE.PARTITION: 0");
+        project.addProcedure(OverflowTest.class, "OVERFLOWTEST.COL_1: 1");
+        project.addProcedure(Eng798Insert.class, "ENG798.C1: 0");
 
         /////////////////////////////////////////////////////////////
         // CONFIG #1: 2 Local Sites/Partitions running on JNI backend

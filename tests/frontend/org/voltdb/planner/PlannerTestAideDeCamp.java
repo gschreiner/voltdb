@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -29,6 +29,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.hsqldb_voltpatches.HSQLInterface;
+import org.hsqldb_voltpatches.HSQLInterface.HSQLParseException;
+import org.hsqldb_voltpatches.VoltXMLElement;
 import org.json_voltpatches.JSONException;
 import org.json_voltpatches.JSONObject;
 import org.voltdb.catalog.Catalog;
@@ -82,6 +84,9 @@ public class PlannerTestAideDeCamp {
         return db;
     }
 
+    public VoltXMLElement compileToXML(String sql) throws HSQLParseException {
+        return hsql.getXMLCompiledStatement(sql);
+    }
     /**
      * Compile a statement and return the head of the plan.
      * @param sql

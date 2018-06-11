@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -22,7 +22,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.nio.ByteBuffer;
 import java.util.List;
 
-import org.voltcore.logging.VoltLogger;
 import org.voltcore.utils.DBBPool;
 import org.voltcore.utils.DBBPool.BBContainer;
 import org.voltcore.utils.Pair;
@@ -39,7 +38,8 @@ import org.voltdb.common.Constants;
 import org.voltdb.exceptions.EEException;
 import org.voltdb.exceptions.SerializableException;
 import org.voltdb.iv2.DeterminismHash;
-import org.voltdb.largequery.LargeBlockManager;
+import org.voltdb.largequery.BlockId;
+import org.voltdb.largequery.LargeBlockTask;
 import org.voltdb.messaging.FastDeserializer;
 import org.voltdb.sysprocs.saverestore.SnapshotUtil;
 import org.voltdb.types.GeographyValue;
@@ -69,9 +69,6 @@ public class ExecutionEngineJNI extends ExecutionEngine {
      * if it is even 1% empty.
      */
     public static final int EE_COMPACTION_THRESHOLD;
-
-    /** java.util.logging logger. */
-    private static final VoltLogger LOG = new VoltLogger("HOST");
 
     private static final boolean HOST_TRACE_ENABLED;
 
@@ -146,13 +143,14 @@ public class ExecutionEngineJNI extends ExecutionEngine {
             final int clusterIndex,
             final long siteId,
             final int partitionId,
+            final int sitesPerHost,
             final int hostId,
             final String hostname,
             final int drClusterId,
             final int defaultDrBufferSize,
             final int tempTableMemory,
             final HashinatorConfig hashinatorConfig,
-            final boolean createDrReplicatedStream)
+            final boolean isLowestSiteId)
     {
         // base class loads the volt shared library.
         super(siteId, partitionId);
@@ -167,6 +165,7 @@ public class ExecutionEngineJNI extends ExecutionEngine {
          */
         pointer = nativeCreate(System.getProperty("java.vm.vendor")
                                .toLowerCase().contains("sun microsystems"));
+
         nativeSetLogLevels(pointer, EELoggers.getLogLevels());
         int errorCode =
             nativeInitialize(
@@ -174,12 +173,13 @@ public class ExecutionEngineJNI extends ExecutionEngine {
                     clusterIndex,
                     siteId,
                     partitionId,
+                    sitesPerHost,
                     hostId,
                     getStringBytes(hostname),
                     drClusterId,
                     defaultDrBufferSize,
                     tempTableMemory * 1024 * 1024,
-                    createDrReplicatedStream,
+                    isLowestSiteId,
                     EE_COMPACTION_THRESHOLD);
         checkErrorCode(errorCode);
 
@@ -665,15 +665,15 @@ public class ExecutionEngineJNI extends ExecutionEngine {
      */
     @Override
     public void exportAction(boolean syncAction,
-            long ackTxnId, long seqNo, int partitionId, String tableSignature)
+            long uso, long seqNo, int partitionId, String tableSignature)
     {
         //Clear is destructive, do it before the native call
         m_nextDeserializer.clear();
         long retval = nativeExportAction(pointer,
-                                         syncAction, ackTxnId, seqNo, getStringBytes(tableSignature));
+                                         syncAction, uso, seqNo, getStringBytes(tableSignature));
         if (retval < 0) {
-            LOG.info("exportAction failed.  syncAction: " + syncAction + ", ackTxnId: " +
-                    ackTxnId + ", seqNo: " + seqNo + ", partitionId: " + partitionId +
+            LOG.info("exportAction failed.  syncAction: " + syncAction + ", uso: " +
+                    uso + ", seqNo: " + seqNo + ", partitionId: " + partitionId +
                     ", tableSignature: " + tableSignature);
         }
     }
@@ -698,7 +698,7 @@ public class ExecutionEngineJNI extends ExecutionEngine {
             Object value,
             HashinatorConfig config)
     {
-        ParameterSet parameterSet = ParameterSet.fromArrayNoCopy(value, config.type.typeId(), config.configBytes);
+        ParameterSet parameterSet = ParameterSet.fromArrayNoCopy(value, config.configBytes);
 
         // serialize the param set
         clearPsetAndEnsureCapacity(parameterSet.getSerializedSize());
@@ -726,14 +726,14 @@ public class ExecutionEngineJNI extends ExecutionEngine {
             }
         }
 
-        nativeUpdateHashinator(pointer, config.type.typeId(), config.configPtr, config.numTokens);
+        nativeUpdateHashinator(pointer, config.configPtr, config.numTokens);
     }
 
     @Override
     public long applyBinaryLog(ByteBuffer log, long txnId, long spHandle, long lastCommittedSpHandle, long uniqueId,
-                               int remoteClusterId, long undoToken) throws EEException
+                               int remoteClusterId, int remotePartitionId, long undoToken) throws EEException
     {
-        long rowCount = nativeApplyBinaryLog(pointer, txnId, spHandle, lastCommittedSpHandle, uniqueId, remoteClusterId, undoToken);
+        long rowCount = nativeApplyBinaryLog(pointer, txnId, spHandle, lastCommittedSpHandle, uniqueId, remoteClusterId,remotePartitionId, undoToken);
         if (rowCount < 0) {
             throwExceptionForError((int)rowCount);
         }
@@ -839,68 +839,40 @@ public class ExecutionEngineJNI extends ExecutionEngine {
     /**
      * Store a large temp table block to disk.
      *
-     * @param id           The id of the block to store to disk
-     * @param origAddress  The original address of the block
+     * @param siteId       The site id of the block to store to disk
+     * @param blockCounter The serial number of the block to store to disk
      * @param block        A directly-allocated ByteBuffer of the block
      * @return true if operation succeeded, false otherwise
      */
-    public boolean storeLargeTempTableBlock(long id, long origAddress, ByteBuffer block) {
-        LargeBlockManager lbm = LargeBlockManager.getInstance();
-        assert (lbm != null);
-
-        try {
-            lbm.storeBlock(id, origAddress, block);
-        }
-        catch (IOException ioe) {
-            LOG.error("Could not write large temp table block to disk: " + ioe.getMessage());
-            return false;
-        }
-
-        return true;
+    public boolean storeLargeTempTableBlock(long siteId, long blockCounter, ByteBuffer block) {
+        LargeBlockTask task = LargeBlockTask.getStoreTask(new BlockId(siteId, blockCounter), block);
+        return executeLargeBlockTaskSynchronously(task);
     }
 
     /**
      * Read a large table block from disk and write it to a ByteBuffer.
      * Block will still be stored on disk when this operation completes.
      *
-     * @param id     The id of the block to load
-     * @param block  The buffer to write the block to
+     * @param siteId         The originating site id of the block to load
+     * @param blockCounter   The id of the block to load
+     * @param block          The buffer to write the block to
      * @return The original address of the block (so that its internal pointers may get updated)
      */
-    public long loadLargeTempTableBlock(long id, ByteBuffer block) {
-        LargeBlockManager lbm = LargeBlockManager.getInstance();
-        assert (lbm != null);
-        long origAddress = 0;
-
-        try {
-            origAddress = lbm.loadBlock(id, block);
-        }
-        catch (IOException ioe) {
-            LOG.error("Could not write large temp table block to disk: " + ioe.getMessage());
-        }
-
-        return origAddress;
+    public boolean loadLargeTempTableBlock(long siteId, long blockCounter, ByteBuffer block) {
+        LargeBlockTask task = LargeBlockTask.getLoadTask(new BlockId(siteId, blockCounter), block);
+        return executeLargeBlockTaskSynchronously(task);
     }
 
     /**
      * Delete the block with the given id from disk.
      *
-     * @param blockId   The id of the block to release
+     * @param siteId        The originating site id of the block to release
+     * @param blockCounter  The serial number of the block to release
      * @return True if the operation succeeded, and false otherwise
      */
-    public boolean releaseLargeTempTableBlock(long blockId) {
-        LargeBlockManager lbm = LargeBlockManager.getInstance();
-        assert (lbm != null);
-
-        try {
-            lbm.releaseBlock(blockId);
-        }
-        catch (IOException ioe) {
-            LOG.error("Could not release large temp table block on disk: " + ioe.getMessage());
-            return false;
-        }
-
-        return true;
+    public boolean releaseLargeTempTableBlock(long siteId, long blockCounter) {
+        LargeBlockTask task = LargeBlockTask.getReleaseTask(new BlockId(siteId, blockCounter));
+        return executeLargeBlockTaskSynchronously(task);
     }
 
     @Override

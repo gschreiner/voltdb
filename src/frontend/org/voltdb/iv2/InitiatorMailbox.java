@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -30,13 +30,10 @@ import org.voltcore.messaging.Mailbox;
 import org.voltcore.messaging.Subject;
 import org.voltcore.messaging.VoltMessage;
 import org.voltcore.utils.CoreUtils;
-import org.voltdb.Consistency;
-import org.voltdb.Consistency.ReadLevel;
 import org.voltdb.RealVoltDB;
 import org.voltdb.VoltDB;
 import org.voltdb.VoltZK;
 import org.voltdb.exceptions.TransactionRestartException;
-import org.voltdb.messaging.MigratePartitionLeaderMessage;
 import org.voltdb.messaging.CompleteTransactionMessage;
 import org.voltdb.messaging.DummyTransactionTaskMessage;
 import org.voltdb.messaging.DumpMessage;
@@ -46,8 +43,10 @@ import org.voltdb.messaging.InitiateResponseMessage;
 import org.voltdb.messaging.Iv2InitiateTaskMessage;
 import org.voltdb.messaging.Iv2RepairLogRequestMessage;
 import org.voltdb.messaging.Iv2RepairLogResponseMessage;
+import org.voltdb.messaging.MigratePartitionLeaderMessage;
 import org.voltdb.messaging.RejoinMessage;
 import org.voltdb.messaging.RepairLogTruncationMessage;
+
 import com.google_voltpatches.common.base.Supplier;
 
 /**
@@ -84,7 +83,6 @@ public class InitiatorMailbox implements Mailbox
     private final LeaderCacheReader m_masterLeaderCache;
     private long m_hsId;
     protected RepairAlgo m_algo;
-    private final Consistency.ReadLevel m_defaultConsistencyReadLevel;
 
     //Queue all the transactions on the new master after MigratePartitionLeader till it receives a message
     //from its older master which has drained all the transactions.
@@ -119,7 +117,6 @@ public class InitiatorMailbox implements Mailbox
     synchronized public RepairAlgo constructRepairAlgo(Supplier<List<Long>> survivors, String whoami, boolean isMigratePartitionLeader) {
         RepairAlgo ra = new SpPromoteAlgo( survivors.get(), this, whoami, m_partitionId, isMigratePartitionLeader);
         if (hostLog.isDebugEnabled()) {
-
             hostLog.debug("[InitiatorMailbox:constructRepairAlgo] whoami: " + whoami + ", partitionId: " +
                     m_partitionId + ", survivors: " + CoreUtils.hsIdCollectionToString(survivors.get()));
         }
@@ -196,8 +193,6 @@ public class InitiatorMailbox implements Mailbox
          * Only used for an assertion on locking.
          */
         m_allInitiatorMailboxes.add(this);
-
-        m_defaultConsistencyReadLevel = VoltDB.Configuration.getDefaultReadConsistencyLevel();
     }
 
     public JoinProducerBase getJoinProducer()
@@ -252,12 +247,16 @@ public class InitiatorMailbox implements Mailbox
     }
 
     // Change the replica set configuration (during or after promotion)
-    public synchronized void updateReplicas(List<Long> replicas, Map<Integer, Long> partitionMasters)
-    {
-        updateReplicasInternal(replicas, partitionMasters);
+    public synchronized long[] updateReplicas(List<Long> replicas, Map<Integer, Long> partitionMasters) {
+        return updateReplicasInternal(replicas, partitionMasters, -1L);
     }
 
-    protected void updateReplicasInternal(List<Long> replicas, Map<Integer, Long> partitionMasters) {
+    public synchronized long[] updateReplicas(List<Long> replicas, Map<Integer, Long> partitionMasters, long snapshotSaveTxnId)
+    {
+        return updateReplicasInternal(replicas, partitionMasters, snapshotSaveTxnId);
+    }
+
+    protected long[] updateReplicasInternal(List<Long> replicas, Map<Integer, Long> partitionMasters, long snapshotSaveTxnId) {
         assert(lockingVows());
         Iv2Trace.logTopology(getHSId(), replicas, m_partitionId);
         // If a replica set has been configured and it changed during
@@ -265,7 +264,7 @@ public class InitiatorMailbox implements Mailbox
         if (m_algo != null) {
             m_algo.cancel();
         }
-        m_scheduler.updateReplicas(replicas, partitionMasters);
+        return m_scheduler.updateReplicas(replicas, partitionMasters, snapshotSaveTxnId);
     }
 
     public long getMasterHsId(int partitionId)
@@ -424,11 +423,6 @@ public class InitiatorMailbox implements Mailbox
             return false;
         }
 
-        if (message.isReadOnly() && m_defaultConsistencyReadLevel == ReadLevel.FAST
-                && m_migratePartitionLeaderStatus == MigratePartitionLeaderStatus.NONE) {
-            return false;
-        }
-
         if (m_scheduler.isLeader() && m_migratePartitionLeaderStatus != MigratePartitionLeaderStatus.TXN_RESTART) {
             //At this point, the message is sent to partition leader
             return false;
@@ -551,6 +545,9 @@ public class InitiatorMailbox implements Mailbox
         List<Iv2RepairLogResponseMessage> logs = m_repairLog.contents(req.getRequestId(),
                 req.isMPIRequest());
 
+        if (req.isMPIRequest()) {
+            m_scheduler.cleanupTransactionBacklogOnRepair();
+        }
         for (Iv2RepairLogResponseMessage log : logs) {
             send(message.m_sourceHSId, log);
         }
@@ -607,11 +604,6 @@ public class InitiatorMailbox implements Mailbox
             hostLog.info("TX HSID: " + CoreUtils.hsIdToString(m_hsId) +
                     ": " + message);
         }
-    }
-
-    public void notifyOfSnapshotNonce(String nonce, long snapshotSpHandle) {
-        if (m_joinProducer == null) return;
-        m_joinProducer.notifyOfSnapshotNonce(nonce, snapshotSpHandle);
     }
 
     //The new partition leader is notified by previous partition leader

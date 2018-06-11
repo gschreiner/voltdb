@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -64,6 +64,9 @@ public class ExplainView extends AdHocNTBase {
                                   new VoltTable.ColumnInfo("EXECUTION_PLAN", VoltType.STRING));
             try {
                 ArrayList<String[]> viewExplanation = ViewExplainer.explain(viewTable);
+                if (viewExplanation.size() == 0) {
+                    vt[i].addRow("", "No query plan is being used.");
+                }
                 for (String[] row : viewExplanation) {
                     vt[i].addRow(row[0], row[1]);
                 }

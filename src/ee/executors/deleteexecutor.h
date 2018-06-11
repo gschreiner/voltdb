@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -76,6 +76,7 @@ protected:
                 const ExecutorVector& executorVector);
     bool p_execute(const NValueArray &params);
 
+private:
     DeletePlanNode* m_node;
 
     /** true if all tuples are deleted, truncate is the only case we
@@ -84,6 +85,7 @@ protected:
     AbstractTempTable* m_inputTable;
     TableTuple m_inputTuple;
 
+    static int64_t s_modifiedTuples;
     /** reference to the engine/context to store the number of
         modified tuples */
     VoltDBEngine* m_engine;

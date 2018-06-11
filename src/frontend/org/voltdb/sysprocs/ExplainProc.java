@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -77,11 +77,12 @@ public class ExplainProc extends AdHocNTBase {
                         "Procedure " + procName + " not in catalog");
             }
 
-            vt[i] = new VoltTable(new VoltTable.ColumnInfo("SQL_STATEMENT", VoltType.STRING),
+            vt[i] = new VoltTable(new VoltTable.ColumnInfo("STATEMENT_NAME", VoltType.STRING),
+                                  new VoltTable.ColumnInfo("SQL_STATEMENT", VoltType.STRING),
                                   new VoltTable.ColumnInfo("EXECUTION_PLAN", VoltType.STRING));
 
             for(Statement stmt : proc.getStatements()) {
-                vt[i].addRow(stmt.getSqltext(), Encoder.hexDecodeToString(stmt.getExplainplan()));
+                vt[i].addRow(stmt.getTypeName(), stmt.getSqltext(), Encoder.hexDecodeToString(stmt.getExplainplan()));
             }
         }
 

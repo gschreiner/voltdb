@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -200,7 +200,8 @@ public abstract class VoltSystemProcedure extends VoltProcedure {
     public void executeSysProcPlanFragmentsAsync(
             SynthesizedPlanFragment pfs[]) {
 
-        TransactionState txnState = m_runner.getTxnState();
+        MpTransactionState txnState = (MpTransactionState)m_runner.getTxnState();
+        assert(txnState != null);
 
         int fragmentIndex = 0;
         for (SynthesizedPlanFragment pf : pfs) {
@@ -222,7 +223,9 @@ public abstract class VoltSystemProcedure extends VoltProcedure {
                     pf.outputDepId,
                     pf.parameters,
                     false,
-                    txnState.isForReplay());
+                    txnState.isForReplay(),
+                    txnState.isNPartTxn(),
+                    txnState.getTimetamp());
 
             //During @MigratePartitionLeader, a fragment may be mis-routed. fragmentIndex is used to check which fragment is mis-routed and
             //to determine how the follow-up fragments are processed.

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -47,6 +47,8 @@ public abstract class TransactionInfoBaseMessage extends VoltMessage {
 
     // If its is true, the message is created on partition leader and sent to replicas.
     protected boolean m_isForReplica = false;
+
+    public static final long INITIAL_TIMESTAMP = Long.MIN_VALUE;
 
     /** Empty constructor for de-serialization */
     protected TransactionInfoBaseMessage() {

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -45,17 +45,10 @@
 
 #include <sstream>
 #include "tablefactory.h"
-#include "common/executorcontext.hpp"
-#include "common/debuglog.h"
-#include "common/tabletuple.h"
-#include "storage/table.h"
 #include "storage/LargeTempTable.h"
-#include "storage/persistenttable.h"
 #include "storage/streamedtable.h"
 #include "storage/temptable.h"
-#include "storage/TempTableLimits.h"
 #include "indexes/tableindexfactory.h"
-#include "common/Pool.hpp"
 
 namespace voltdb {
 Table* TableFactory::getPersistentTable(
@@ -71,14 +64,15 @@ Table* TableFactory::getPersistentTable(
             int tableAllocationTargetSize,
             int tupleLimit,
             int32_t compactionThreshold,
-            bool drEnabled)
+            bool drEnabled,
+            bool isReplicated)
 {
     Table *table = NULL;
     StreamedTable *streamedTable = NULL;
     PersistentTable *persistentTable = NULL;
 
     if (exportOnly) {
-        table = streamedTable = new StreamedTable(exportEnabled, partitionColumn);
+        table = streamedTable = new StreamedTable(partitionColumn);
     }
     else {
         table = persistentTable = new PersistentTable(partitionColumn,
@@ -86,7 +80,8 @@ Table* TableFactory::getPersistentTable(
                                                       tableIsMaterialized,
                                                       tableAllocationTargetSize,
                                                       tupleLimit,
-                                                      drEnabled);
+                                                      drEnabled,
+                                                      isReplicated);
     }
 
     initCommon(databaseId,
@@ -106,7 +101,7 @@ Table* TableFactory::getPersistentTable(
         // Allocate and assign the tuple storage block to the persistent table ahead of time instead
         // of doing so at time of first tuple insertion. The intent of block allocation ahead of time
         // is to avoid allocation cost at time of tuple insertion
-        TBPtr block = persistentTable->allocateNextBlock();
+        TBPtr block = persistentTable->allocateFirstBlock();
         assert(block->hasFreeTuples());
         persistentTable->m_blocksWithSpace.insert(block);
     }
@@ -127,7 +122,7 @@ StreamedTable* TableFactory::getStreamedTableForTest(
             bool exportEnabled,
             int32_t compactionThreshold)
 {
-    StreamedTable *table = new StreamedTable(exportEnabled, wrapper);
+    StreamedTable *table = new StreamedTable(wrapper);
 
     initCommon(databaseId,
                table,
@@ -180,6 +175,14 @@ TempTable* TableFactory::buildCopiedTempTable(
             const Table* template_table) {
     TempTable* newTable = new TempTable();
     initCommon(0, newTable, name, template_table->m_schema, template_table->m_columnNames, false);
+    return newTable;
+}
+
+LargeTempTable* TableFactory::buildCopiedLargeTempTable(
+           const std::string &name,
+           const Table* templateTable) {
+    LargeTempTable* newTable = new LargeTempTable();
+    initCommon(0, newTable, name, templateTable->m_schema, templateTable->m_columnNames, false);
     return newTable;
 }
 

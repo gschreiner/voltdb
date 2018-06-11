@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -164,6 +164,10 @@ public class Iv2InitiateTaskMessage extends TransactionInfoBaseMessage {
         return m_isSinglePartition;
     }
 
+    public short getNPartCount() {
+        return (short)(m_nPartitions != null ? m_nPartitions.length : 0);
+    }
+
     public boolean shouldReturnResultTables() {
         return m_shouldReturnResultTables;
     }
@@ -301,6 +305,9 @@ public class Iv2InitiateTaskMessage extends TransactionInfoBaseMessage {
             sb.append("  WRITE, ");
         if (m_isSinglePartition)
             sb.append("SINGLE PARTITION, ");
+        else
+        if (getNPartCount() != 0)
+            sb.append("N PARTITION (").append(m_nPartitions).append("), ");
         else
             sb.append("MULTI PARTITION, ");
         if (isForReplay())

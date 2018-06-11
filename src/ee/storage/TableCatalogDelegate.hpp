@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -36,6 +36,7 @@ class ExecutorContext;
 class TupleSchema;
 struct TableIndexScheme;
 class DRTupleStream;
+class VoltDBEngine;
 
 // There might be a better place for this, but current callers happen to have this header in common.
 template<typename K, typename V> V findInMapOrNull(const K& key, std::map<K, V> const &the_map)
@@ -62,11 +63,12 @@ template<typename K, typename V> V findInMapOrNull(const K& key, std::unordered_
 
 class TableCatalogDelegate {
   public:
-    TableCatalogDelegate(const std::string& signature, int32_t compactionThreshold)
+    TableCatalogDelegate(const std::string& signature, int32_t compactionThreshold, VoltDBEngine* engine)
         : m_table(NULL)
         , m_exportEnabled(false)
         , m_signature(signature)
         , m_compactionThreshold(compactionThreshold)
+//        , m_engine(engine)
     {}
 
     ~TableCatalogDelegate();
@@ -156,6 +158,7 @@ class TableCatalogDelegate {
     const std::string m_signature;
     const int32_t m_compactionThreshold;
     char m_signatureHash[20];
+//    voltdb::VoltDBEngine *m_engine;
 };
 
 }

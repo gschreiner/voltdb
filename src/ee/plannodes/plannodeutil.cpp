@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -44,9 +44,6 @@
  */
 
 #include "plannodes/plannodeutil.h"
-#include "common/debuglog.h"
-#include "common/common.h"
-#include "common/FatalException.hpp"
 #include "plannodes/aggregatenode.h"
 #include "plannodes/deletenode.h"
 #include "plannodes/indexscannode.h"
@@ -59,7 +56,6 @@
 #include "plannodes/mergereceivenode.h"
 #include "plannodes/nestloopnode.h"
 #include "plannodes/nestloopindexnode.h"
-#include "plannodes/projectionnode.h"
 #include "plannodes/orderbynode.h"
 #include "plannodes/receivenode.h"
 #include "plannodes/commontablenode.h"
@@ -70,7 +66,6 @@
 #include "plannodes/unionnode.h"
 #include "plannodes/updatenode.h"
 #include "plannodes/windowfunctionnode.h"
-#include <sstream>
 
 namespace voltdb {
 namespace plannodeutil {

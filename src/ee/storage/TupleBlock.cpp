@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -33,7 +33,7 @@ TupleBlock::TupleBlock(Table *table, TBBucketPtr bucket) :
         m_nextFreeTuple(0),
         m_lastCompactionOffset(0),
         m_bucket(bucket),
-        m_bucketIndex(0)
+        m_bucketIndex(bucket.get() == NULL ? -1 : 0)
 {
 #ifdef USE_MMAP
     size_t tableAllocationSize = static_cast<size_t> (m_tupleLength * m_tuplesPerBlock);

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -190,7 +190,8 @@ public class SystemProcedureCatalog {
         builder.put("@ExecuteTask",             new Config("org.voltdb.sysprocs.ExecuteTask",              false, false, false, 0,    VoltType.INVALID,   false, false, false, true,      true,   false,            true,         true  ));
         builder.put("@ExecuteTask_SP",          new Config("org.voltdb.sysprocs.ExecuteTask_SP",           true,  false, false, 0,    VoltType.VARBINARY, false, false, true,  true,      true,   false,            true,         false ));
         builder.put("@UpdateSettings",          new Config("org.voltdb.sysprocs.UpdateSettings",           false, false, false, 0,    VoltType.INVALID,   false, false, false, true,      true,   false,            true,         false ));
-        builder.put("@Ping",                    new Config(null,                                           true,  true,  false, 0,    VoltType.INVALID,   false, false, true,  true,      false,  false,            true,         false ));
+        builder.put("@Ping",                    new Config(null,                                           false, true,  false, 0,    VoltType.INVALID,   false, false, true,  true,      false,  true,             true,         false ));
+        builder.put("@PingPartitions",          new Config("org.voltdb.sysprocs.PingPartitions",           false, false, false, 0,    VoltType.INVALID,   false, false, true,  true,      false,  false,            true,         true  ));
         builder.put("@GetPartitionKeys",        new Config(null,                                           false, true,  true,  0,    VoltType.INVALID,   false, false, true,  true,      false,  false,            true,         false ));
         builder.put("@Subscribe",               new Config(null,                                           false, true,  false, 0,    VoltType.INVALID,   false, false, true,  true,      false,  false,            true,         false ));
         builder.put("@GC",                      new Config("org.voltdb.sysprocs.GC",                       false, false, false, 0,    VoltType.INVALID,   false, false, true,  true,      false,  false,            false,        false ));
@@ -202,6 +203,7 @@ public class SystemProcedureCatalog {
         builder.put("@ExplainProc",             new Config("org.voltdb.sysprocs.ExplainProc",              false, true,  false, 0,    VoltType.INVALID,   false, false, true,  true,      false,  false,            false,        false ));
         builder.put("@ExplainView",             new Config("org.voltdb.sysprocs.ExplainView",              false, true,  false, 0,    VoltType.INVALID,   false, false, true,  true,      false,  false,            false,        false ));
         builder.put("@ExplainJSON",             new Config("org.voltdb.sysprocs.ExplainJSON",              false, true,  false, 0,    VoltType.INVALID,   false, false, true,  true,      false,  false,            false,        false ));
+        builder.put("@ExplainCatalog",          new Config("org.voltdb.sysprocs.ExplainCatalog",           false, true,  false, 0,    VoltType.INVALID,   false, false, true,  true,      false,  false,            false,        false ));
         builder.put("@SendSentinel",            new Config(null,                                           true,  false, false, 0,    VoltType.INVALID,   true,  false, false, true,      false,  false,            true,         false ));
         builder.put("@PrepareShutdown",         new Config("org.voltdb.sysprocs.PrepareShutdown",          false, false, false, 0,    VoltType.INVALID,   false, false, true,  true,      false,  true ,            true,         false ));
         builder.put("@SwapTables",              new Config("org.voltdb.sysprocs.SwapTables",               false, false, false, 0,    VoltType.INVALID,   false, false, true,  true,      true,   false,            false,        false ));
@@ -215,6 +217,9 @@ public class SystemProcedureCatalog {
                                                                                                            false, false, false, 0,    VoltType.INVALID,   true,  false, true,  true,      false,  false,            false,        false ));
         builder.put("@StartNodeDRConsumerNT",   new Config("org.voltdb.sysprocs.RestartDRConsumerNT$StartNodeDRConsumerNT",
                                                                                                            false, false, false, 0,    VoltType.INVALID,   true,  false, true,  true,      false,  false,            false,        false ));
+        builder.put("@NibbleDeleteSP",          new Config("org.voltdb.sysprocs.NibbleDeleteSP",           true,  false, false, 0,    VoltType.INVALID,   false, false, true,  true,      true,   false,            true,         false ));
+        builder.put("@NibbleDeleteMP",          new Config("org.voltdb.sysprocs.NibbleDeleteMP",           false, false, false, 0,    VoltType.INVALID,   false, false, true,  true,      true,   false,            true,         false ));
+        builder.put("@LowImpactDelete",         new Config("org.voltdb.sysprocs.LowImpactDelete",          true,  false, false, 0,    VoltType.INVALID,   false, false, false, true,      false,  false,            false,        false ));
         listing = builder.build();
     }
 }

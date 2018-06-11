@@ -378,6 +378,18 @@ AS
           ,  C2
 ;
 
+CREATE VIEW VT1b
+(
+    C1
+,   TOTAL
+)
+AS
+    SELECT C1
+        ,  SUM(C2)
+    FROM T24
+    GROUP BY C1
+;
+
 CREATE VIEW VT2
 (
     C1
@@ -579,6 +591,8 @@ AS BEGIN
     SELECT *
     FROM T26;
 END;
+
+DROP FUNCTION IntFunction IF EXISTS;
 
 CREATE FUNCTION IntFunction FROM METHOD org.voltdb_testfuncs.BasicTestUDFSuite.unaryIntFunction;
 

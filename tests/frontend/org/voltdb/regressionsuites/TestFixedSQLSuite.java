@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -29,6 +29,7 @@ import java.math.BigDecimal;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.voltdb.BackendTarget;
+import org.voltdb.ProcedurePartitionData;
 import org.voltdb.VoltTable;
 import org.voltdb.VoltType;
 import org.voltdb.client.Client;
@@ -37,6 +38,7 @@ import org.voltdb.client.NoConnectionsException;
 import org.voltdb.client.ProcCallException;
 import org.voltdb.client.ProcedureCallback;
 import org.voltdb.compiler.VoltProjectBuilder;
+import org.voltdb.types.GeographyPointValue;
 import org.voltdb.types.TimestampType;
 import org.voltdb.utils.Encoder;
 import org.voltdb_testprocs.regressionsuites.fixedsql.BoxedByteArrays;
@@ -56,8 +58,9 @@ import org.voltdb_testprocs.regressionsuites.fixedsql.TestENG2423;
 public class TestFixedSQLSuite extends RegressionSuite {
 
     /** Procedures used by this suite */
-    static final Class<?>[] PROCEDURES = { Insert.class, InsertBoxed.class, TestENG1232.class, TestENG1232_2.class,
-        TestENG2423.InnerProc.class, BoxedByteArrays.class, InPrimitiveArrays.class };
+    static final Class<?>[] MP_PROCEDURES = {
+            Insert.class, InsertBoxed.class, TestENG1232.class, TestENG1232_2.class,
+            TestENG2423.InnerProc.class, BoxedByteArrays.class, InPrimitiveArrays.class };
 
     static final int VARCHAR_VARBINARY_THRESHOLD = 100;
 
@@ -3061,6 +3064,120 @@ public class TestFixedSQLSuite extends RegressionSuite {
         assertContentOfTable(new Object[][] {}, vt);
     }
 
+    public void testSwapTablesTruncateReplicated() throws Exception {
+        if (isHSQL()) {
+            return;
+        }
+        Client client = getClient();
+        client.callProcedure("@AdHoc", "insert into swapper_table_foo values (0, 'dog');");
+        client.callProcedure("@AdHoc", "insert into swapper_table_foo values (1, 'cat');");
+        client.callProcedure("@SwapTables", "Swapper_Table_Foo", "Swapper_Table_BAR");
+        client.callProcedure("@AdHoc", "drop table swapper_table_foo;");
+        client.callProcedure("@AdHoc", "drop table swapper_table_bar;");
+
+        // Restore the catalog so that the junit re-init optimization won't complain.
+        client.callProcedure("@AdHoc", "create table swapper_table_foo (\n" +
+                                       "       i integer,\n" +
+                                       "       j varchar(32),\n" +
+                                       "       primary key (i)\n" +
+                                       ");\n" +
+                                       "\n" +
+                                       "create table swapper_table_bar (\n" +
+                                       "       i integer,\n" +
+                                       "       j varchar(32),\n" +
+                                       "       primary key (i)\n" +
+                                       ");");
+    }
+
+    public void testEng13852() throws Exception {
+        if (isHSQL()) {
+            return;
+        }
+
+        Client client = getClient();
+
+        assertSuccessfulDML(client,
+                "insert into ENG_13852_P5 values ( \n" +
+                "        0, \n" +
+                "        1, 10, 100, 1000,\n" +
+                "        1.0, 2.0,\n" +
+                "        'foo', 'bar', 'baz', 'boo', 'bugs',\n" +
+                "        now,\n" +
+                "        x'ab',\n" +
+                "        pointfromtext('point(0 0)'), -- point\n" +
+                "        null, -- polygon\n" +
+                "        null, null, null, x'ab')");
+        assertSuccessfulDML(client, "insert into ENG_13852_R11 values (\n" +
+                "        0,\n" +
+                "        1, 10, 100, 1000,\n" +
+                "        1.0, 2.0,\n" +
+                "        'foo', 'bar', 'baz', 'boo', 'bugs',\n" +
+                "        now,\n" +
+                "        x'ab',\n" +
+                "        pointfromtext('point(0 0)'), -- point\n" +
+                "        null, -- polygon\n" +
+                "        null, null, null, x'ab')");
+
+        // In this bug, we didn't properly apply the "MV fix", that is,
+        // the aggregation node that must be in the plan when a view aggregates
+        // table, but the partition key is not a GROUP BY key.
+        // This bug happens when there is a derived table and a view that needs the fix.
+        VoltTable vt = client.callProcedure("@AdHoc",
+                "SELECT ALL R11.POINT AS CA2\n" +
+                "FROM (SELECT DISTINCT * FROM ENG_13852_R11 LIMIT 12) AS R11,\n" +
+                "     ENG_13852_VP5 AS TA1;").getResults()[0];
+        GeographyPointValue gpv = GeographyPointValue.fromWKT("point (0 0)");
+        assertContentOfTable(new Object[][] {{gpv}}, vt);
+    }
+
+    public void testEng13801() throws Exception {
+        if (isHSQL()) {
+            return;
+        }
+
+        Client client = getClient();
+
+        // In this bug, the COUNT(*) in the ORDER BY clause was in the query's
+        // result, even though it's not in the SELECT list.
+        VoltTable vt = client.callProcedure("@AdHoc",
+                "SELECT MIN(VCHAR_INLINE) FROM ENG_13852_R11 AS T1 ORDER BY COUNT(*), T1.BIG;").getResults()[0];
+        assertEquals(1, vt.getColumnCount());
+
+        assertSuccessfulDML(client,
+                "insert into ENG_13852_P5 values ( \n" +
+                        "        0, \n" +
+                        "        1, 10, 100, 1000,\n" +
+                        "        1.0, 2.0,\n" +
+                        "        'foo', 'bar', 'baz', 'boo', 'bugs',\n" +
+                        "        now,\n" +
+                        "        x'ab',\n" +
+                        "        pointfromtext('point(1 0)'), -- point\n" +
+                        "        null, -- polygon\n" +
+                        "        null, null, null, x'ab')");
+        assertSuccessfulDML(client, "insert into ENG_13852_R11 values (\n" +
+                "        0,\n" +
+                "        1, 10, 100, 1000,\n" +
+                "        1.0, 2.0,\n" +
+                "        'foo', 'bar', 'baz', 'boo', 'bugs',\n" +
+                "        now,\n" +
+                "        x'ab',\n" +
+                "        pointfromtext('point(0 0)'), -- point\n" +
+                "        null, -- polygon\n" +
+                "        null, null, null, x'ab')");
+
+        // Original query found by grammar generator:
+        vt = client.callProcedure("@AdHoc",
+                "SELECT 'foo' AS CA2, OUTER_TBL.TINY " +
+                        "FROM ENG_13852_P5 AS OUTER_TBL " +
+                        "WHERE VCHAR_INLINE != (" +
+                        "  SELECT MAX(VCHAR) " +
+                        "  FROM ENG_13852_R11 AS INNER_TBL " +
+                        "  WHERE POINT != OUTER_TBL.POINT " +
+                        "  ORDER BY COUNT(*)) " +
+                        "ORDER BY NUM;").getResults()[0];
+        assertContentOfTable(new Object[][] {{"foo", 1}}, vt);
+    }
+
     //
     // JUnit / RegressionSuite boilerplate
     //
@@ -3077,16 +3194,11 @@ public class TestFixedSQLSuite extends RegressionSuite {
 
         VoltProjectBuilder project = new VoltProjectBuilder();
         project.addSchema(Insert.class.getResource("fixed-sql-ddl.sql"));
-        project.addProcedures(PROCEDURES);
-
-        // Now that this fails to compile with an overflow error, it should be migrated to a
-        // Failures suite.
-        //project.addStmtProcedure("Crap", "insert into COUNT_NULL values (" + Long.MIN_VALUE + ", 1, 200)");
+        project.addMultiPartitionProcedures(MP_PROCEDURES);
 
         project.addStmtProcedure("Eng397Limit1", "Select P1.NUM from P1 order by P1.NUM limit ?;");
-//        project.addStmtProcedure("Eng490Select", "SELECT A.ASSET_ID, A.OBJECT_DETAIL_ID,  OD.OBJECT_DETAIL_ID FROM ASSET A, OBJECT_DETAIL OD WHERE A.OBJECT_DETAIL_ID = OD.OBJECT_DETAIL_ID;");
         project.addStmtProcedure("InsertNullString", "Insert into STRINGPART values (?, ?, ?);",
-                                 "STRINGPART.NAME: 0");
+                                 new ProcedurePartitionData("STRINGPART", "NAME", "0"));
         project.addStmtProcedure("Eng993Insert", "insert into P1 (ID,DESC,NUM,RATIO) VALUES(1+?,'NULL',NULL,1+?);");
         project.addStmtProcedure("Eng5926Insert", "insert into PWEE (ID,WEE,NUM,RATIO) VALUES(1+?,?||'WEE',NULL,1+?);");
 
@@ -3096,6 +3208,8 @@ public class TestFixedSQLSuite extends RegressionSuite {
         project.addStmtProcedure("Eng1316Update_P", "update P1 set num = num + 1 where id < 104");
         project.addStmtProcedure("Eng1316Insert_P1", "insert into P1 values (?, ?, ?, ?);", "P1.ID: 0");
         project.addStmtProcedure("Eng1316Update_P1", "update P1 set num = num + 1 where id = ?", "P1.ID: 0");
+
+        project.setUseDDLSchema(true);
 
         //* CONFIG #1: JNI -- keep this enabled by default with / / vs. / *
         config = new LocalCluster("fixedsql-threesite.jar", 3, 1, 0, BackendTarget.NATIVE_EE_JNI);

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -45,20 +45,11 @@
 
 #include "nestloopindexexecutor.h"
 
-#include "common/debuglog.h"
-#include "common/tabletuple.h"
-#include "common/FatalException.hpp"
-
-#include "execution/ExecutorVector.h"
 #include "execution/ProgressMonitorProxy.h"
-#include "execution/VoltDBEngine.h"
 
 #include "executors/aggregateexecutor.h"
-#include "executors/executorutil.h"
-#include "executors/executorutil.h"
 #include "executors/indexscanexecutor.h"
 
-#include "expressions/abstractexpression.h"
 #include "expressions/tuplevalueexpression.h"
 
 #include "plannodes/nestloopindexnode.h"
@@ -66,17 +57,9 @@
 #include "plannodes/limitnode.h"
 #include "plannodes/aggregatenode.h"
 
-#include "storage/table.h"
 #include "storage/tabletuplefilter.h"
 #include "storage/persistenttable.h"
 #include "storage/temptable.h"
-#include "storage/tableiterator.h"
-
-#include "indexes/tableindex.h"
-
-#include <vector>
-#include <string>
-#include <stack>
 
 using namespace std;
 using namespace voltdb;
@@ -171,7 +154,7 @@ bool NestLoopIndexExecutor::p_execute(const NValueArray &params)
     Table* outer_table = node->getInputTable();
     assert(outer_table);
     VOLT_TRACE("executing NestLoopIndex with outer table: %s, inner table: %s",
-               outer_table->debug().c_str(), inner_table->debug().c_str());
+               outer_table->debug("").c_str(), inner_table->debug("").c_str());
 
     //
     // Substitute parameter to SEARCH KEY Note that the expressions
@@ -309,7 +292,7 @@ bool NestLoopIndexExecutor::p_execute(const NValueArray &params)
             // Now use the outer table tuple to construct the search key
             // against the inner table
             //
-            const TableTuple& index_values = m_indexValues.tuple();
+            TableTuple index_values = m_indexValues.tuple();
             index_values.setAllNulls();
             for (int ctr = 0; ctr < activeNumOfSearchKeys; ctr++) {
                 // in a normal index scan, params would be substituted here,
@@ -593,7 +576,7 @@ bool NestLoopIndexExecutor::p_execute(const NValueArray &params)
         m_aggExec->p_execute_finish();
     }
 
-    VOLT_TRACE ("result table:\n %s", m_tmpOutputTable->debug().c_str());
+    VOLT_TRACE ("result table:\n %s", m_tmpOutputTable->debug("").c_str());
     VOLT_TRACE("Finished NestLoopIndex");
 
     return true;

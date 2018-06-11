@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -17,11 +17,13 @@
 
 #ifndef JNITOPEND_H_
 #define JNITOPEND_H_
+#include <jni.h>
+
 #include "boost/shared_array.hpp"
 #include "common/Topend.h"
 #include "common/FatalException.hpp"
+#include "common/LargeTempTableBlockId.hpp"
 #include "common/Pool.hpp"
-#include <jni.h>
 
 namespace voltdb {
 
@@ -45,12 +47,13 @@ public:
     void crashVoltDB(FatalException e);
     int64_t getQueuedExportBytes(int32_t partitionId, std::string signature);
     void pushExportBuffer(
-            int64_t exportGeneration,
             int32_t partitionId,
             std::string signature,
             StreamBlock *block,
-            bool sync,
-            bool endOfStream);
+            bool sync);
+    void pushEndOfStream(
+            int32_t partitionId,
+            std::string signature);
 
     int64_t pushDRBuffer(int32_t partitionId, StreamBlock *block);
 
@@ -70,7 +73,7 @@ public:
 
     bool loadLargeTempTableBlock(LargeTempTableBlock* block);
 
-    bool releaseLargeTempTableBlock(int64_t blockId);
+    bool releaseLargeTempTableBlock(LargeTempTableBlockId blockId);
 
     int32_t callJavaUserDefinedFunction();
     void resizeUDFBuffer(int32_t size);
@@ -90,6 +93,7 @@ private:
     jmethodID m_planForFragmentIdMID;
     jmethodID m_crashVoltDBMID;
     jmethodID m_pushExportBufferMID;
+    jmethodID m_pushExportEOFMID;
     jmethodID m_getQueuedExportBytesMID;
     jmethodID m_pushDRBufferMID;
     jmethodID m_pushPoisonPillMID;

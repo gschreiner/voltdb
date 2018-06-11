@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -55,6 +55,7 @@
 #include "executors/indexcountexecutor.h"
 #include "executors/tablecountexecutor.h"
 #include "executors/insertexecutor.h"
+#include "executors/largeorderbyexecutor.h"
 #include "executors/limitexecutor.h"
 #include "executors/materializeexecutor.h"
 #include "executors/materializedscanexecutor.h"
@@ -76,7 +77,8 @@
 namespace voltdb {
 
 AbstractExecutor* getNewExecutor(VoltDBEngine *engine,
-                                 AbstractPlanNode* abstract_node) {
+                                 AbstractPlanNode* abstract_node,
+                                 bool isLargeQuery) {
     PlanNodeType type = abstract_node->getPlanNodeType();
     switch (type) {
     case PLAN_NODE_TYPE_AGGREGATE: return new AggregateSerialExecutor(engine, abstract_node);
@@ -95,7 +97,13 @@ AbstractExecutor* getNewExecutor(VoltDBEngine *engine,
     case PLAN_NODE_TYPE_MERGERECEIVE: return new MergeReceiveExecutor(engine, abstract_node);
     case PLAN_NODE_TYPE_NESTLOOP: return new NestLoopExecutor(engine, abstract_node);
     case PLAN_NODE_TYPE_NESTLOOPINDEX: return new NestLoopIndexExecutor(engine, abstract_node);
-    case PLAN_NODE_TYPE_ORDERBY: return new OrderByExecutor(engine, abstract_node);
+    case PLAN_NODE_TYPE_ORDERBY:
+        if (isLargeQuery) {
+            return new LargeOrderByExecutor(engine, abstract_node);
+        }
+        else {
+            return new OrderByExecutor(engine, abstract_node);
+        }
     case PLAN_NODE_TYPE_PROJECTION: return new ProjectionExecutor(engine, abstract_node);
     case PLAN_NODE_TYPE_RECEIVE: return new ReceiveExecutor(engine, abstract_node);
     case PLAN_NODE_TYPE_COMMONTABLE: return new CommonTableExecutor(engine, abstract_node);

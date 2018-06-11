@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -24,6 +24,8 @@
 #include "temptable.h"
 
 #include "catalog/database.h"
+
+#include "common/ExecuteWithMpMemory.h"
 #include "common/Pool.hpp"
 #include "common/tabletuple.h"
 #include "common/types.h"
@@ -392,21 +394,21 @@ bool handleConflict(VoltDBEngine *engine, PersistentTable *drTable, Pool *pool, 
                                   insertConflict, NEW_ROW, uniqueId, remoteClusterId);
     }
 
-    int retval = ExecutorContext::getExecutorContext()->getTopend()->reportDRConflict(engine->getPartitionId(),
-                                                                                      remoteClusterId,
-                                                                                      UniqueId::timestampSinceUnixEpoch(uniqueId),
-                                                                                      drTable->name(),
-                                                                                      actionType,
-                                                                                      deleteConflict,
-                                                                                      existingMetaTableForDelete.get(),
-                                                                                      existingTupleTableForDelete.get(),
-                                                                                      expectedMetaTableForDelete.get(),
-                                                                                      expectedTupleTableForDelete.get(),
-                                                                                      insertConflict,
-                                                                                      existingMetaTableForInsert.get(),
-                                                                                      existingTupleTableForInsert.get(),
-                                                                                      newMetaTableForInsert.get(),
-                                                                                      newTupleTableForInsert.get());
+    int retval = ExecutorContext::getPhysicalTopend()->reportDRConflict(engine->getPartitionId(),
+                                                                        remoteClusterId,
+                                                                        UniqueId::timestampSinceUnixEpoch(uniqueId),
+                                                                        drTable->name(),
+                                                                        actionType,
+                                                                        deleteConflict,
+                                                                        existingMetaTableForDelete.get(),
+                                                                        existingTupleTableForDelete.get(),
+                                                                        expectedMetaTableForDelete.get(),
+                                                                        expectedTupleTableForDelete.get(),
+                                                                        insertConflict,
+                                                                        existingMetaTableForInsert.get(),
+                                                                        existingTupleTableForInsert.get(),
+                                                                        newMetaTableForInsert.get(),
+                                                                        newTupleTableForInsert.get());
     bool applyRemoteChange = isApplyNewRow(retval);
     bool resolved = isResolved(retval);
     // if conflict is not resolved, don't delete any existing rows.
@@ -488,9 +490,11 @@ bool handleConflict(VoltDBEngine *engine, PersistentTable *drTable, Pool *pool, 
 
 BinaryLogSink::BinaryLogSink() {}
 
-int64_t BinaryLogSink::applyTxn(ReferenceSerializeInputLE *taskInfo,
+    int64_t BinaryLogSink::applyTxn(ReferenceSerializeInputLE *taskInfo,
                                 boost::unordered_map<int64_t, PersistentTable*> &tables,
-                                Pool *pool, VoltDBEngine *engine, int32_t remoteClusterId,
+                                Pool *pool,
+                                VoltDBEngine *engine,
+                                int32_t remoteClusterId,
                                 const char *txnStart,
                                 int64_t localUniqueId) {
     int64_t      rowCount = 0;
@@ -498,49 +502,74 @@ int64_t BinaryLogSink::applyTxn(ReferenceSerializeInputLE *taskInfo,
     int64_t      uniqueId;
     int64_t      sequenceNumber;
     int32_t      partitionHash;
+    bool         isCurrentTxnForReplicatedTable;
+    bool         isCurrentRecordForReplicatedTable;
     bool         isForLocalPartition;
     bool         skipWrongHashRows;
+    bool         replicatedTableOperation = false;
+    bool         skipForReplicated = false;
 
     type = static_cast<DRRecordType>(taskInfo->readByte());
     assert(type == DR_RECORD_BEGIN_TXN);
     uniqueId = taskInfo->readLong();
     sequenceNumber = taskInfo->readLong();
 
-    DRTxnPartitionHashFlag hashFlag = static_cast<DRTxnPartitionHashFlag>(taskInfo->readByte());
+    int8_t rawHashFlag = taskInfo->readByte();
+    isCurrentRecordForReplicatedTable = rawHashFlag & REPLICATED_TABLE_MASK;
+    DRTxnPartitionHashFlag hashFlag = static_cast<DRTxnPartitionHashFlag>(rawHashFlag & ~REPLICATED_TABLE_MASK);
+    isCurrentTxnForReplicatedTable = hashFlag == TXN_PAR_HASH_REPLICATED;
     taskInfo->readInt();  // txnLength
     partitionHash = taskInfo->readInt();
     bool isLocalMpTxn = UniqueId::isMpUniqueId(localUniqueId);
-    bool isLocalRegularSpTxn = !isLocalMpTxn && (hashFlag==TXN_PAR_HASH_SINGLE || hashFlag==TXN_PAR_HASH_MULTI);
-    bool isLocalRegularMpTxn = isLocalMpTxn && (hashFlag==TXN_PAR_HASH_SINGLE || hashFlag==TXN_PAR_HASH_MULTI);
+    bool isLocalRegularSpTxn = !isLocalMpTxn && (hashFlag == TXN_PAR_HASH_SINGLE || hashFlag == TXN_PAR_HASH_MULTI);
+    bool isLocalRegularMpTxn = isLocalMpTxn && (hashFlag == TXN_PAR_HASH_SINGLE || hashFlag == TXN_PAR_HASH_MULTI);
+
     // Read the whole txn since there is only one version number at the beginning
     type = static_cast<DRRecordType>(taskInfo->readByte());
     while (type != DR_RECORD_END_TXN) {
-        isForLocalPartition = engine->isLocalSite(partitionHash);
-        // - Remote MP txns are always executed as local MP txns. Skip hashes that don't match for these.
-        // - Remote single-hash SP txns must throw mispartitioned exception for hashes that don't match.
-        // - Remote SP txns with multihash will be routed as MP txns for mixed size clusters.
-        //   It is OK to skip in this case because they will go
-        //   to all partitions and the records will get applied on the correct partitions.
-        // - Remote SP txns with multihash will be routed as SP txns for same size clusters.
-        //   We should throw mispartitioned for these because for same size, they should
-        //   always map to the same partition on both clusters.
-        // Conclusion: If it is local MP txn, skip. If not, throw mispartitioned.
-        // Replicated (MP txns) and Truncate table txns (could be SP, if runeverywhere) don't have partitionHash value.
-        // So don't throw for those either.
-        if (!isForLocalPartition && isLocalRegularSpTxn) {
-            /** temporary debug stmts **/
-            /*
-            VOLT_ERROR("Throwing mispartitioned from site with partitionId=%d", engine->getPartitionId());
-            VOLT_ERROR("hashFlag=%d, partitionHash=%d, drRecordType=%d", (int) hashFlag, partitionHash, (int) type);
-            */
-            throw SerializableEEException(VOLT_EE_EXCEPTION_TYPE_TXN_MISPARTITIONED,
-                "Binary log txns were sent to the wrong partition");
+        // fast path for replicated table change, save calls to VoltDBEngine::isLocalSite()
+        if (isCurrentTxnForReplicatedTable || isCurrentRecordForReplicatedTable) {
+            // before NO_REPLICATED_STREAM_PROTOCOL_VERSION, decide replicateTable changes with TXN_PAR_HASH_REPLICATED (isCurrentTxnForReplicatedTable)
+            // with NO_REPLICATED_STREAM_PROTOCOL_VERSION, decide replicateTable changes with first bit of rawHashFlag (isCurrentRecordForReplicatedTable)
+            // both cases will only operate replicated Table changes on lowest site
+            // Coordinates with other sites handled in VoltDBEngine->applyBinaryLog()
+            if (engine->isLowestSite()) {
+                replicatedTableOperation = true;
+            } else {
+                skipForReplicated = true;
+            }
+            skipWrongHashRows = false;
+        } else {
+            isForLocalPartition = engine->isLocalSite(partitionHash);
+            // - Remote MP txns are always executed as local MP txns. Skip hashes that don't match for these.
+            // - Remote single-hash SP txns must throw mispartitioned exception for hashes that don't match.
+            // - Remote SP txns with multihash will be routed as MP txns for mixed size clusters.
+            //   It is OK to skip in this case because they will go
+            //   to all partitions and the records will get applied on the correct partitions.
+            // - Remote SP txns with multihash will be routed as SP txns for same size clusters.
+            //   We should throw mispartitioned for these because for same size, they should
+            //   always map to the same partition on both clusters.
+            // Conclusion: If it is local MP txn, skip. If not, throw mispartitioned.
+            // Replicated (MP txns) and Truncate table txns (could be SP, if runeverywhere) don't have partitionHash value.
+            // So don't throw for those either.
+            if (!isForLocalPartition && isLocalRegularSpTxn) {
+                /** temporary debug stmts **/
+                /*
+                VOLT_ERROR("Throwing mispartitioned from site with partitionId=%d", engine->getPartitionId());
+                VOLT_ERROR("hashFlag=%d, partitionHash=%d, drRecordType=%d", (int) hashFlag, partitionHash, (int) type);
+                */
+                throw SerializableEEException(VOLT_EE_EXCEPTION_TYPE_TXN_MISPARTITIONED,
+                    "Binary log txns were sent to the wrong partition");
+            }
+            skipWrongHashRows = (!isForLocalPartition && isLocalRegularMpTxn);
         }
-        skipWrongHashRows = (!isForLocalPartition && isLocalRegularMpTxn);
+        ConditionalExecuteWithMpMemory possiblyUseMpMemory(replicatedTableOperation);
         rowCount += apply(taskInfo, type, tables, pool, engine, remoteClusterId,
-                txnStart, sequenceNumber, uniqueId, skipWrongHashRows);
-        type = static_cast<DRRecordType>(taskInfo->readByte());
+                txnStart, sequenceNumber, uniqueId, skipWrongHashRows || skipForReplicated, replicatedTableOperation);
+        int8_t rawType = taskInfo->readByte();
+        type = static_cast<DRRecordType>(rawType & ~REPLICATED_TABLE_MASK);
         if (type == DR_RECORD_HASH_DELIMITER) {
+            isCurrentRecordForReplicatedTable = rawType & REPLICATED_TABLE_MASK;
             partitionHash = taskInfo->readInt();
             type = static_cast<DRRecordType>(taskInfo->readByte());
         }
@@ -553,14 +582,20 @@ int64_t BinaryLogSink::applyTxn(ReferenceSerializeInputLE *taskInfo,
     }
     uint32_t checksum = taskInfo->readInt();
     validateChecksum(checksum, txnStart, taskInfo->getRawPointer());
-
     return rowCount;
 }
 
-int64_t BinaryLogSink::apply(ReferenceSerializeInputLE *taskInfo, const DRRecordType type,
+int64_t BinaryLogSink::apply(ReferenceSerializeInputLE *taskInfo,
+                             const DRRecordType type,
                              boost::unordered_map<int64_t, PersistentTable*> &tables,
-                             Pool *pool, VoltDBEngine *engine, int32_t remoteClusterId,
-                             const char *txnStart, int64_t sequenceNumber, int64_t uniqueId, bool skipRow) {
+                             Pool *pool,
+                             VoltDBEngine *engine,
+                             int32_t remoteClusterId,
+                             const char *txnStart,
+                             int64_t sequenceNumber,
+                             int64_t uniqueId,
+                             bool skipRow,
+                             bool replicatedTableOperation) {
     switch (type) {
     case DR_RECORD_INSERT: {
         int64_t tableHandle = taskInfo->readLong();
@@ -758,7 +793,7 @@ int64_t BinaryLogSink::apply(ReferenceSerializeInputLE *taskInfo, const DRRecord
 
         PersistentTable *table = tableIter->second;
 
-        table->truncateTable(engine, true);
+        table->truncateTable(engine, replicatedTableOperation, true);
 
         break;
     }

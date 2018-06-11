@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -47,6 +47,7 @@
 #define HSTORETABLE_H
 
 #include "common/ids.h"
+#include "common/LargeTempTableBlockId.hpp"
 #include "common/types.h"
 #include "common/TupleSchema.h"
 #include "common/Pool.hpp"
@@ -214,18 +215,24 @@ class Table {
      * Used for recovery where the schema is not sent.
      */
     void loadTuplesFromNoHeader(SerializeInputBE& serialInput,
-                                Pool* stringPool = NULL,
-                                ReferenceSerializeOutput* uniqueViolationOutput = NULL,
-                                bool shouldDRStreamRows = false);
+                                Pool* stringPool = NULL);
 
     /**
      * Loads only tuple data, not schema, from the serialized table.
      * Used for initial data loading and receiving dependencies.
      */
     void loadTuplesFrom(SerializeInputBE& serialInput,
+                        Pool* stringPool = NULL);
+
+    /**
+     * Loads tuple data from the serialized table.
+     * Used for snapshot restore and bulkLoad
+     */
+    void loadTuplesForLoadTable(SerializeInputBE& serialInput,
                         Pool* stringPool = NULL,
                         ReferenceSerializeOutput* uniqueViolationOutput = NULL,
-                        bool shouldDRStreamRows = false);
+                        bool shouldDRStreamRows = false,
+                        bool ignoreTupleLimit = true);
 
 
     // ------------------------------------------------------------------
@@ -300,7 +307,8 @@ protected:
                                     ReferenceSerializeOutput* uniqueViolationOutput,
                                     int32_t& serializedTupleCount,
                                     size_t& tupleCountPosition,
-                                    bool shouldDRStreamRow) { }
+                                    bool shouldDRStreamRow = false,
+                                    bool ignoreTupleLimit = true) { }
 
     virtual void swapTuples(TableTuple& sourceTupleWithNewValues, TableTuple& destinationTuple) {
         throwFatalException("Unsupported operation");
@@ -316,7 +324,13 @@ protected:
     virtual void nextFreeTuple(TableTuple* tuple) = 0;
     virtual void freeLastScannedBlock(std::vector<TBPtr>::iterator nextBlockIterator) {
         throw SerializableEEException(VOLT_EE_EXCEPTION_TYPE_EEEXCEPTION,
-                                     "May not use freeLastScannedBlock with streamed tables or persistent tables.");
+                                     "May only use freeLastScannedBlock with instances of TempTable.");
+    }
+
+    // Used by delete-as-you-go iterators.  Returns an iterator to the block id of the next block.
+    virtual std::vector<LargeTempTableBlockId>::iterator releaseBlock(std::vector<LargeTempTableBlockId>::iterator it) {
+        throw SerializableEEException(VOLT_EE_EXCEPTION_TYPE_EEEXCEPTION,
+                                     "May only use releaseBlock with instances of LargeTempTable.");
     }
 
     // Return tuple blocks addresses

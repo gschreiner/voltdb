@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -25,10 +25,11 @@ import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.consumer.RangeAssignor;
+import org.apache.kafka.clients.consumer.RoundRobinAssignor;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.serialization.ByteBufferDeserializer;
 import org.voltcore.logging.VoltLogger;
@@ -95,7 +96,7 @@ public class KafkaStreamImporter extends AbstractImporter {
         props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, m_config.getSessionTimeOut());
         props.put(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, m_config.getHeartBeatInterval());
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, m_config.getAutoOffsetReset());
-        props.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG, RangeAssignor.class.getName());
+        props.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG, RoundRobinAssignor.class.getName());
 
         int kafkaPartitions = 0;
         KafkaInternalConsumerRunner theConsumer = null;
@@ -106,6 +107,11 @@ public class KafkaStreamImporter extends AbstractImporter {
             LOGGER.error("Couldn't create Kafka consumer. Please check the configuration paramaters. Error:" + ke.getMessage());
         } catch (Throwable terminate) {
             LOGGER.error("Failed creating Kafka consumer ", terminate);
+        }
+
+        //paused or shutting down
+        if (kafkaPartitions < 1) {
+            return;
         }
 
         int totalConsumerCount = kafkaPartitions;
@@ -143,17 +149,25 @@ public class KafkaStreamImporter extends AbstractImporter {
 
     @Override
     public void stop() {
-        for (KafkaInternalConsumerRunner consumer : m_consumers) {
-            consumer.shutdown();
-        }
-        if (m_executorService != null) {
-            try {
-                m_executorService.shutdownNow();
-                m_executorService.awaitTermination(365, TimeUnit.DAYS);
-            } catch (Throwable ignore) {
-            } finally {
-                m_executorService = null;
+        if (m_consumers != null) {
+            for (KafkaInternalConsumerRunner consumer : m_consumers) {
+                if (consumer != null) {
+                    consumer.shutdown();
+                }
             }
+        }
+
+        if (m_executorService == null) {
+            return;
+        }
+
+        //graceful shutdown to allow importers to properly process post shutdown tasks.
+        m_executorService.shutdown();
+        try {
+            m_executorService.awaitTermination(60, TimeUnit.SECONDS);
+        } catch (InterruptedException ignore) {
+        } finally {
+            m_executorService = null;
         }
     }
 }

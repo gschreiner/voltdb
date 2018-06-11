@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -86,6 +86,8 @@ public class SnapshotSiteProcessor {
     public static final Object m_snapshotCreateLock = new Object();
     public static CyclicBarrier m_snapshotCreateSetupBarrier = null;
     public static CyclicBarrier m_snapshotCreateFinishBarrier = null;
+    // This flag is for test only
+    public static boolean requireNewBarrierInTest = true;
     public static final Runnable m_snapshotCreateSetupBarrierAction = new Runnable() {
         @Override
         public void run() {
@@ -100,10 +102,11 @@ public class SnapshotSiteProcessor {
 
     public static void readySnapshotSetupBarriers(int numSites) {
         synchronized (SnapshotSiteProcessor.m_snapshotCreateLock) {
-            if (SnapshotSiteProcessor.m_snapshotCreateSetupBarrier == null) {
+            if (requireNewBarrierInTest) {
                 SnapshotSiteProcessor.m_snapshotCreateFinishBarrier = new CyclicBarrier(numSites);
                 SnapshotSiteProcessor.m_snapshotCreateSetupBarrier =
                         new CyclicBarrier(numSites, SnapshotSiteProcessor.m_snapshotCreateSetupBarrierAction);
+                requireNewBarrierInTest = false;
             } else if (SnapshotSiteProcessor.m_snapshotCreateSetupBarrier.isBroken()) {
                 SnapshotSiteProcessor.m_snapshotCreateSetupBarrier.reset();
                 SnapshotSiteProcessor.m_snapshotCreateFinishBarrier.reset();
@@ -215,13 +218,13 @@ public class SnapshotSiteProcessor {
                 m_exportSequenceNumbers.put(t.getTypeName(), sequenceNumbers);
             }
 
-            long[] ackOffSetAndSequenceNumber =
+            long[] usoAndSequenceNumber =
                     context.getSiteProcedureConnection().getUSOForExportTable(t.getSignature());
             sequenceNumbers.put(
                             context.getPartitionId(),
                             Pair.of(
-                                ackOffSetAndSequenceNumber[0],
-                                ackOffSetAndSequenceNumber[1]));
+                                usoAndSequenceNumber[0],
+                                usoAndSequenceNumber[1]));
         }
         TupleStreamStateInfo drStateInfo = context.getSiteProcedureConnection().getDRTupleStreamStateInfo();
         m_drTupleStreamInfo.put(context.getPartitionId(), drStateInfo);
@@ -261,8 +264,13 @@ public class SnapshotSiteProcessor {
     }
 
     public void shutdown() throws InterruptedException {
-        m_snapshotCreateSetupBarrier = null;
-        m_snapshotCreateFinishBarrier = null;
+        if (m_snapshotCreateSetupBarrier != null) {
+            m_snapshotCreateSetupBarrier.reset();
+        }
+        if (m_snapshotCreateSetupBarrier != null) {
+            m_snapshotCreateFinishBarrier.reset();
+        }
+        requireNewBarrierInTest = true;
         if (m_snapshotTargetTerminators != null) {
             for (Thread t : m_snapshotTargetTerminators) {
                 t.join();

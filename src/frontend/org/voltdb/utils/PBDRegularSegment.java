@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -339,10 +339,10 @@ public class PBDRegularSegment extends PBDSegment {
     }
 
     @Override
-    protected int writeTruncatedEntry(BinaryDeque.TruncatorResponse entry, int length) throws IOException
+    protected int writeTruncatedEntry(BinaryDeque.TruncatorResponse entry) throws IOException
     {
         int written = 0;
-        final DBBPool.BBContainer partialCont = DBBPool.allocateDirect(length);
+        final DBBPool.BBContainer partialCont = DBBPool.allocateDirect(OBJECT_HEADER_BYTES + entry.getTruncatedBuffSize());
         try {
             written += entry.writeTruncatedObject(partialCont.b());
             partialCont.b().flip();

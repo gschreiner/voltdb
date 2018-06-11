@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -33,6 +33,12 @@
 #include "common/ThreadLocalPool.h"
 #include "common/tabletuple.h"
 #include <deque>
+#include <stdlib.h>
+#if __cplusplus >= 201103L
+#include <atomic>
+#else
+#include <cstdatomic>
+#endif
 
 namespace voltdb {
 const int NO_NEW_BUCKET_INDEX = -1;
@@ -280,7 +286,7 @@ public:
     }
 private:
     char*   m_storage;
-    uint32_t m_references;
+    std::atomic<uint32_t> m_references;
     uint32_t m_tupleLength;
     uint32_t m_tuplesPerBlock;
     uint32_t m_activeTuples;

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -48,11 +48,7 @@
 #include "catalog/planfragment.h"
 #include "catalog/statement.h"
 #include "executors/abstractexecutor.h"
-#include "plannodes/abstractplannode.h"
-#include "plannodes/abstractplannode.h"
 #include "executors/executorfactory.h"
-
-#include "boost/foreach.hpp"
 
 namespace voltdb {
 
@@ -148,7 +144,7 @@ void ExecutorVector::initPlanNode(VoltDBEngine* engine, AbstractPlanNode* node) 
 
     // Executor is created here. An executor is *devoted* to this
     // plannode so that it can cache anything for the plannode
-    AbstractExecutor* executor = getNewExecutor(engine, node);
+    AbstractExecutor* executor = getNewExecutor(engine, node, isLargeQuery());
     if (executor == NULL) {
         char message[256];
         snprintf(message, sizeof(message), "Unexpected error. "

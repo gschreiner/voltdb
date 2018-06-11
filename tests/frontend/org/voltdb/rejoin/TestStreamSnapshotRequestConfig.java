@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -62,7 +62,7 @@ public class TestStreamSnapshotRequestConfig {
         pairs.put(1l, 3l);
         pairs.put(1l, 4l);
         pairs.put(2l, 3l);
-        StreamSnapshotRequestConfig.Stream stream = new StreamSnapshotRequestConfig.Stream(pairs, null);
+        StreamSnapshotRequestConfig.Stream stream = new StreamSnapshotRequestConfig.Stream(pairs, null, 3L);
 
         JSONStringer stringer = new JSONStringer();
         stringer.object();
@@ -87,7 +87,7 @@ public class TestStreamSnapshotRequestConfig {
         pairs.put(1l, 3l);
         pairs.put(1l, 4l);
         pairs.put(2l, 3l);
-        StreamSnapshotRequestConfig.Stream stream = new StreamSnapshotRequestConfig.Stream(pairs, 5);
+        StreamSnapshotRequestConfig.Stream stream = new StreamSnapshotRequestConfig.Stream(pairs, 5, 3L);
 
         JSONStringer stringer = new JSONStringer();
         stringer.object();

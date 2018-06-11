@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -816,6 +816,11 @@ public class PersistentBinaryDeque implements BinaryDeque {
         }
 
         @Override
+        public int getTruncatedBuffSize() {
+            return m_retval.remaining();
+        }
+
+        @Override
         public int writeTruncatedObject(ByteBuffer output) {
             int objectSize = m_retval.remaining();
             output.putInt(objectSize);
@@ -837,6 +842,11 @@ public class PersistentBinaryDeque implements BinaryDeque {
             super(Status.PARTIAL_TRUNCATE);
             m_ds = ds;
             m_truncationCallback = truncationCallback;
+        }
+
+        @Override
+        public int getTruncatedBuffSize() throws IOException {
+            return m_ds.getSerializedSize();
         }
 
         @Override

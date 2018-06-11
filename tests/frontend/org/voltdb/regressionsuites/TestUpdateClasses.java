@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -931,7 +931,7 @@ public class TestUpdateClasses extends AdhocDDLTestBase {
                 fail("Invalid SQLStmt should fail during UpdateClasses");
             } catch (ProcCallException e) {
                 assertTrue(e.getMessage().contains("Failed to plan for statement"));
-                assertTrue(e.getMessage().contains("user lacks privilege or object not found: TT_INVALID_QUERY"));
+                assertTrue(e.getMessage().contains("object not found: TT_INVALID_QUERY"));
             }
         }
         finally {

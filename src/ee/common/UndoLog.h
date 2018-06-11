@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -44,6 +44,8 @@ namespace voltdb
          */
         void clear();
 
+        inline void setUndoLogForLowestSite() { m_undoLogForLowestSite = true; }
+
         inline UndoQuantum* generateUndoQuantum(int64_t nextUndoToken)
         {
             //std::cout << "Generating token " << nextUndoToken
@@ -63,7 +65,7 @@ namespace voltdb
                 m_undoDataPools.pop_back();
             }
             assert(pool);
-            UndoQuantum *undoQuantum = new (*pool) UndoQuantum(nextUndoToken, pool);
+            UndoQuantum *undoQuantum = new (*pool) UndoQuantum(nextUndoToken, pool, m_undoLogForLowestSite);
             m_undoQuantums.push_back(undoQuantum);
             return undoQuantum;
         }
@@ -199,6 +201,7 @@ namespace voltdb
 
         std::vector<Pool*> m_undoDataPools;
         std::deque<UndoQuantum*> m_undoQuantums;
+        bool m_undoLogForLowestSite;
     };
 }
 #endif /* UNDOLOG_H_ */

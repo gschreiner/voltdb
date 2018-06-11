@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -48,7 +48,7 @@ public class MpInitiator extends BaseInitiator implements Promotable
 {
     public static final int MP_INIT_PID = TxnEgo.PARTITIONID_MAX_VALUE;
 
-    public MpInitiator(HostMessenger messenger, List<Long> buddyHSIds, StatsAgent agent)
+    public MpInitiator(HostMessenger messenger, List<Long> buddyHSIds, StatsAgent agent, int leaderNodeId)
     {
         super(VoltZK.iv2mpi,
                 messenger,
@@ -56,7 +56,8 @@ public class MpInitiator extends BaseInitiator implements Promotable
                 new MpScheduler(
                     MP_INIT_PID,
                     buddyHSIds,
-                    new SiteTaskerQueue(MP_INIT_PID)),
+                    new SiteTaskerQueue(MP_INIT_PID),
+                    leaderNodeId),
                 "MP",
                 agent,
                 StartAction.CREATE /* never for rejoin */);
@@ -72,7 +73,7 @@ public class MpInitiator extends BaseInitiator implements Promotable
                           MemoryStats memStats,
                           CommandLog cl,
                           String coreBindIds,
-                          boolean hasMPDRGateway)
+                          boolean isLowestSiteId)
         throws KeeperException, InterruptedException, ExecutionException
     {
         // note the mp initiator always uses a non-ipc site, even though it's never used for anything
@@ -116,7 +117,7 @@ public class MpInitiator extends BaseInitiator implements Promotable
             m_term.start();
             while (!success) {
                 final RepairAlgo repair =
-                        m_initiatorMailbox.constructRepairAlgo(m_term.getInterestingHSIds(), m_whoami);
+                        m_initiatorMailbox.constructRepairAlgo(m_term.getInterestingHSIds(), m_whoami, false);
 
                 // term syslogs the start of leader promotion.
                 long txnid = Long.MIN_VALUE;

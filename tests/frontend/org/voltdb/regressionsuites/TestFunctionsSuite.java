@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -3705,13 +3705,16 @@ public class TestFunctionsSuite extends RegressionSuite {
          */
         ClientResponse cr = null;
         VoltTable vt = null;
-        double pi = 3.1415926535897932384;
 
         cr = client.callProcedure("@AdHoc","INSERT INTO P1 (ID) VALUES(1)");
         assertEquals(ClientResponse.SUCCESS, cr.getStatus());
         vt = client.callProcedure("@AdHoc", "SELECT PI() * ID FROM P1 WHERE ID = 1;").getResults()[0];
         assertTrue(vt.advanceRow());
-        assertTrue(Math.abs(vt.getDouble(0) - pi) <= 1.0e-16);
+        assertTrue(Math.abs(vt.getDouble(0) - Math.PI) <= 1.0e-16);
+
+        vt = client.callProcedure("@AdHoc", "SELECT PI * ID FROM P1 WHERE ID = 1;").getResults()[0];
+        assertTrue(vt.advanceRow());
+        assertTrue(Math.abs(vt.getDouble(0) - Math.PI) <= 1.0e-16);
 
         cr = client.callProcedure("@AdHoc", "TRUNCATE TABLE P1");
         assertEquals(ClientResponse.SUCCESS, cr.getStatus());

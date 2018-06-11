@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -417,6 +417,86 @@ public class SQLCommand
         String echoErrorArgs = SQLParser.parseEchoErrorStatement(line);
         if (echoErrorArgs != null) {
             System.err.println(echoErrorArgs);
+            return true;
+        }
+
+        // DESCRIBE table
+        String describeArgs = SQLParser.parseDescribeStatement(line);
+        if (describeArgs != null) {
+
+            String tableName = "";
+            String type = "";
+            String remarks = "";
+            VoltTable tableData = m_client.callProcedure("@SystemCatalog", "TABLES").getResults()[0];
+            while (tableData.advanceRow()) {
+                String t = tableData.getString(2);
+                if (t.equalsIgnoreCase(describeArgs)) {
+                    tableName = t;
+                    type = tableData.getString(3);
+                    remarks = tableData.getString(4);
+                    break;
+                }
+            }
+
+            if (tableName.equals("")) {
+                System.err.println("Table does not exist");
+                return true;
+            }
+
+            VoltTable columnData = m_client.callProcedure("@SystemCatalog", "COLUMNS").getResults()[0];
+            // get max column name width
+            int maxNameWidth = 10;
+            while (columnData.advanceRow()) {
+                String tname = columnData.getString(2);
+                if (tname.equalsIgnoreCase(tableName)) {
+                    String colname = columnData.getString(3);
+                    if (colname.length() > maxNameWidth) {
+                        maxNameWidth = colname.length();
+                    }
+                }
+            }
+            columnData.resetRowPosition();
+            String headerFormat = "%-" + maxNameWidth + "s|%-16s|%-11s|%-9s|%-16s\n";
+            String rowFormat = "%-" + maxNameWidth + "s|%-16s|%11d|%-9s|%-16s\n";
+            System.out.printf(headerFormat,"COLUMN","DATATYPE","SIZE","NULLABLE","REMARKS");
+            String DASHES = new String(new char[56+maxNameWidth]).replace("\0", "-");
+            System.out.println(DASHES);
+            while (columnData.advanceRow()) {
+                String tname = columnData.getString(2);
+                if (tname.equalsIgnoreCase(tableName)) {
+                    String colName = columnData.getString(3);
+                    String dataType = columnData.getString(5);
+                    long size = columnData.getLong(6);
+                    String partitionColumn = columnData.getString(11);
+                    if (columnData.wasNull()) {
+                        partitionColumn = "";
+                    }
+                    String isNullable = columnData.getString(17);
+                    String notNull = "";
+                    if (isNullable.equals("NO")) {
+                        notNull = "NOT NULL";
+                    }
+                    System.out.printf(rowFormat,colName,dataType,size,notNull,partitionColumn);
+                }
+            }
+            System.out.println(DASHES);
+
+            // primary key
+            String primaryKey = "";
+            VoltTable keyData = m_client.callProcedure("@SystemCatalog", "PRIMARYKEYS").getResults()[0];
+            while (keyData.advanceRow()) {
+                String tname = keyData.getString(2);
+                if (tname.equalsIgnoreCase(tableName)) {
+                    String colName = keyData.getString(3);
+                    if (!primaryKey.equals("")) {
+                        primaryKey += ",";
+                    }
+                    primaryKey += colName;
+                }
+            }
+            if (!primaryKey.equals("")) {
+                System.out.println("Primary Key (" + primaryKey + ")");
+            }
             return true;
         }
 
@@ -921,6 +1001,12 @@ public class SQLCommand
                 return;
             }
 
+            // explaincatalog => @ExplainCatalog
+            if (SQLParser.parseExplainCatalogCall(statement)) {
+                printResponse(m_client.callProcedure("@ExplainCatalog"), false);
+                return;
+            }
+
             String explainProcName = SQLParser.parseExplainProcCall(statement);
             if (explainProcName != null) {
                 // We've got a statement that starts with "explainproc", send the statement to
@@ -1082,6 +1168,8 @@ public class SQLCommand
                 ImmutableMap.<Integer, List<String>>builder().put( 2, Arrays.asList("varchar", "varchar")).build());
         Procedures.put("@UpdateLogging",
                 ImmutableMap.<Integer, List<String>>builder().put( 1, Arrays.asList("varchar")).build());
+        Procedures.put("@Ping",
+                ImmutableMap.<Integer, List<String>>builder().put( 0, new ArrayList<String>()).build());
         Procedures.put("@Promote",
                 ImmutableMap.<Integer, List<String>>builder().put( 0, new ArrayList<String>()).build());
         Procedures.put("@SnapshotStatus",

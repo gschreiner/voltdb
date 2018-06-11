@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -22,7 +22,6 @@ import java.util.List;
 import java.util.Map;
 
 import org.voltcore.logging.Level;
-import org.voltcore.logging.VoltLogger;
 import org.voltcore.messaging.Mailbox;
 import org.voltcore.utils.CoreUtils;
 import org.voltdb.DependencyPair;
@@ -35,6 +34,7 @@ import org.voltdb.VoltType;
 import org.voltdb.client.BatchTimeoutOverrideType;
 import org.voltdb.exceptions.EEException;
 import org.voltdb.exceptions.InterruptException;
+import org.voltdb.exceptions.ReplicatedTableException;
 import org.voltdb.exceptions.SQLException;
 import org.voltdb.jni.ExecutionEngine;
 import org.voltdb.messaging.FastDeserializer;
@@ -48,11 +48,8 @@ import org.voltdb.utils.MiscUtils;
 import org.voltdb.utils.VoltTableUtil;
 import org.voltdb.utils.VoltTrace;
 
-public class FragmentTask extends TransactionTask
+public class FragmentTask extends FragmentTaskBase
 {
-    /** java.util.logging logger. */
-    private static final VoltLogger LOG = new VoltLogger("HOST");
-
     final Mailbox m_initiator;
     final FragmentTaskMessage m_fragmentMsg;
     final Map<Integer, List<VoltTable>> m_inputDeps;
@@ -213,6 +210,9 @@ public class FragmentTask extends TransactionTask
     @Override
     public void runFromTaskLog(SiteProcedureConnection siteConnection)
     {
+        if (hostLog.isDebugEnabled()) {
+            hostLog.debug("START replaying txn: " + this);
+        }
         // Set the begin undo token if we haven't already
         // In the future we could record a token per batch
         // and do partial rollback
@@ -225,6 +225,9 @@ public class FragmentTask extends TransactionTask
         // ignore response.
         processFragmentTask(siteConnection);
         completeFragment();
+        if (hostLog.isDebugEnabled()) {
+            hostLog.debug("COMPLETE replaying txn: " + this);
+        }
     }
 
     private void completeFragment()
@@ -354,7 +357,7 @@ public class FragmentTask extends TransactionTask
                     // get a copy of the buffer
                     fragResult.readFully(fullBacking);
                 } catch (final IOException ex) {
-                    LOG.error("Failed to deserialze result table" + ex);
+                    hostLog.error("Failed to deserialze result table" + ex);
                     throw new EEException(ExecutionEngine.ERRORCODE_WRONG_SERIALIZED_BYTES);
                 }
 
@@ -374,6 +377,15 @@ public class FragmentTask extends TransactionTask
                 }
                 break;
             } catch (final SQLException e) {
+                hostLog.l7dlog( Level.TRACE, LogKeys.host_ExecutionSite_ExceptionExecutingPF.name(), new Object[] { Encoder.hexEncode(planHash) }, e);
+                currentFragResponse.setStatus(FragmentResponseMessage.UNEXPECTED_ERROR, e);
+                if (currentFragResponse.getTableCount() == 0) {
+                    // Make sure the response has at least 1 result with a valid DependencyId
+                    currentFragResponse.addDependency(new DependencyPair.BufferDependencyPair(outputDepId,
+                            m_rawDummyResult, 0, m_rawDummyResult.length));
+                }
+                break;
+            } catch (final ReplicatedTableException e) {
                 hostLog.l7dlog( Level.TRACE, LogKeys.host_ExecutionSite_ExceptionExecutingPF.name(), new Object[] { Encoder.hexEncode(planHash) }, e);
                 currentFragResponse.setStatus(FragmentResponseMessage.UNEXPECTED_ERROR, e);
                 if (currentFragResponse.getTableCount() == 0) {
@@ -434,6 +446,21 @@ public class FragmentTask extends TransactionTask
         sb.append("  TXN ID: ").append(TxnEgo.txnIdToString(getTxnId()));
         sb.append("  SP HANDLE ID: ").append(TxnEgo.txnIdToString(getSpHandle()));
         sb.append("  ON HSID: ").append(CoreUtils.hsIdToString(m_initiator.getHSId()));
+        sb.append("  TIMESTAMP: ");
+        MpRestartSequenceGenerator.restartSeqIdToString(getTimestamp(), sb);
         return sb.toString();
+    }
+
+    public boolean needCoordination() {
+        return !(m_txnState.isReadOnly() || isBorrowedTask() || m_isNPartition);
+    }
+
+    public boolean isBorrowedTask() {
+        return false;
+    }
+
+    @Override
+    public long getTimestamp() {
+        return m_fragmentMsg.getTimestamp();
     }
 }

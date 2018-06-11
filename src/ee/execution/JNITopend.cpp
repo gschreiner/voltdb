@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -15,10 +15,7 @@
  * along with VoltDB.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "JNITopend.h"
-#include <cassert>
-#include <iostream>
 
-#include "common/debuglog.h"
 #include "common/StreamBlock.h"
 #include "storage/table.h"
 
@@ -163,10 +160,19 @@ JNITopend::JNITopend(JNIEnv *env, jobject caller) : m_jniEnv(env), m_javaExecuti
     m_pushExportBufferMID = m_jniEnv->GetStaticMethodID(
             m_exportManagerClass,
             "pushExportBuffer",
-            "(JILjava/lang/String;JJLjava/nio/ByteBuffer;ZZ)V");
+            "(ILjava/lang/String;JJLjava/nio/ByteBuffer;Z)V");
     if (m_pushExportBufferMID == NULL) {
         m_jniEnv->ExceptionDescribe();
         assert(m_pushExportBufferMID != NULL);
+        throw std::exception();
+    }
+    m_pushExportEOFMID = m_jniEnv->GetStaticMethodID(
+            m_exportManagerClass,
+            "pushEndOfStream",
+            "(ILjava/lang/String;)V");
+    if (m_pushExportEOFMID == NULL) {
+        m_jniEnv->ExceptionDescribe();
+        assert(m_pushExportEOFMID != NULL);
         throw std::exception();
     }
 
@@ -255,7 +261,7 @@ JNITopend::JNITopend(JNIEnv *env, jobject caller) : m_jniEnv(env), m_javaExecuti
 
     m_loadLargeTempTableBlockMID = m_jniEnv->GetMethodID(jniClass,
                                                          "loadLargeTempTableBlock",
-                                                          "(JLjava/nio/ByteBuffer;)J");
+                                                          "(JJLjava/nio/ByteBuffer;)Z");
     if (m_loadLargeTempTableBlockMID == NULL) {
         m_jniEnv->ExceptionDescribe();
         assert(m_loadLargeTempTableBlockMID != 0);
@@ -264,7 +270,7 @@ JNITopend::JNITopend(JNIEnv *env, jobject caller) : m_jniEnv(env), m_javaExecuti
 
     m_releaseLargeTempTableBlockMID = m_jniEnv->GetMethodID(jniClass,
                                                             "releaseLargeTempTableBlock",
-                                                            "(J)Z");
+                                                            "(JJ)Z");
     if (m_releaseLargeTempTableBlockMID == NULL) {
         m_jniEnv->ExceptionDescribe();
         assert(m_releaseLargeTempTableBlockMID != 0);
@@ -430,12 +436,11 @@ bool JNITopend::storeLargeTempTableBlock(LargeTempTableBlock* block) {
         throw std::exception();
     }
 
-    int64_t address = reinterpret_cast<int64_t>(storage.get());
-
+    LargeTempTableBlockId blockId = block->id();
     jboolean success = m_jniEnv->CallBooleanMethod(m_javaExecutionEngine,
                                                    m_storeLargeTempTableBlockMID,
-                                                   block->id(),
-                                                   address,
+                                                   blockId.getSiteId(),
+                                                   blockId.getBlockCounter(),
                                                    blockByteBuffer);
     // It's assumed that when control returns to this method the block
     // will have been persisted to disk.  The memory for the block
@@ -460,21 +465,22 @@ bool JNITopend::loadLargeTempTableBlock(LargeTempTableBlock* block) {
         throw std::exception();
     }
 
-    int64_t origAddress = m_jniEnv->CallLongMethod(m_javaExecutionEngine,
-                                                   m_loadLargeTempTableBlockMID,
-                                                   block->id(),
-                                                   blockByteBuffer);
-    if (origAddress != 0) {
-        block->setData(reinterpret_cast<char*>(origAddress), std::move(storage));
+    bool success = m_jniEnv->CallBooleanMethod(m_javaExecutionEngine,
+                                               m_loadLargeTempTableBlockMID,
+                                               block->id(),
+                                               blockByteBuffer);
+    if (success) {
+        block->setData(std::move(storage));
     }
 
-    return origAddress != 0;
+    return success;
 }
 
-bool JNITopend::releaseLargeTempTableBlock(int64_t blockId) {
+bool JNITopend::releaseLargeTempTableBlock(LargeTempTableBlockId blockId) {
     jboolean success = (jboolean)m_jniEnv->CallBooleanMethod(m_javaExecutionEngine,
                                                              m_releaseLargeTempTableBlockMID,
-                                                             blockId);
+                                                             blockId.getSiteId(),
+                                                             blockId.getBlockCounter());
     return success;
 }
 
@@ -549,12 +555,10 @@ int64_t JNITopend::getQueuedExportBytes(int32_t partitionId, string signature) {
 }
 
 void JNITopend::pushExportBuffer(
-        int64_t exportGeneration,
         int32_t partitionId,
         string signature,
         StreamBlock *block,
-        bool sync,
-        bool endOfStream) {
+        bool sync) {
     jstring signatureString = m_jniEnv->NewStringUTF(signature.c_str());
     if (block != NULL) {
         jobject buffer = m_jniEnv->NewDirectByteBuffer( block->rawPtr(), block->rawLength());
@@ -566,29 +570,42 @@ void JNITopend::pushExportBuffer(
         m_jniEnv->CallStaticVoidMethod(
                 m_exportManagerClass,
                 m_pushExportBufferMID,
-                exportGeneration,
                 partitionId,
                 signatureString,
                 block->uso(),
                 reinterpret_cast<jlong>(block->rawPtr()),
                 buffer,
-                sync ? JNI_TRUE : JNI_FALSE,
-                endOfStream ? JNI_TRUE : JNI_FALSE);
+                sync ? JNI_TRUE : JNI_FALSE);
         m_jniEnv->DeleteLocalRef(buffer);
     } else {
 
         m_jniEnv->CallStaticVoidMethod(
                         m_exportManagerClass,
                         m_pushExportBufferMID,
-                        exportGeneration,
                         partitionId,
                         signatureString,
                         static_cast<int64_t>(0),
                         NULL,
                         NULL,
-                        sync ? JNI_TRUE : JNI_FALSE,
-                        endOfStream ? JNI_TRUE : JNI_FALSE);
+                        sync ? JNI_TRUE : JNI_FALSE);
     }
+    m_jniEnv->DeleteLocalRef(signatureString);
+    if (m_jniEnv->ExceptionCheck()) {
+        m_jniEnv->ExceptionDescribe();
+        throw std::exception();
+    }
+}
+
+void JNITopend::pushEndOfStream(
+        int32_t partitionId,
+        string signature) {
+    jstring signatureString = m_jniEnv->NewStringUTF(signature.c_str());
+    //std::cout << "Block is null" << std::endl;
+    m_jniEnv->CallStaticVoidMethod(
+                    m_exportManagerClass,
+                    m_pushExportEOFMID,
+                    partitionId,
+                    signatureString);
     m_jniEnv->DeleteLocalRef(signatureString);
     if (m_jniEnv->ExceptionCheck()) {
         m_jniEnv->ExceptionDescribe();

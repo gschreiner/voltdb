@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -48,8 +48,8 @@ public class ParsedDeleteStmt extends AbstractParsedStmt {
     * @param paramValues
     * @param db
     */
-    public ParsedDeleteStmt(String[] paramValues, Database db) {
-        super(paramValues, db);
+    public ParsedDeleteStmt(AbstractParsedStmt parent, String[] paramValues, Database db) {
+        super(parent, paramValues, db);
     }
 
     /** Given XML for ORDER BY, add each column to m_orderColumns */
@@ -194,5 +194,10 @@ public class ParsedDeleteStmt extends AbstractParsedStmt {
 
     @Override
     public boolean isDML() { return true; }
+
+    @Override
+    protected void parseCommonTableExpressions(VoltXMLElement root) {
+        // No with statements here.
+    }
 
 }

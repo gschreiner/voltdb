@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -45,16 +45,10 @@
 
 #include "unionexecutor.h"
 
-#include "common/tabletuple.h"
-#include "execution/ExecutorVector.h"
 #include "plannodes/unionnode.h"
-#include "storage/AbstractTempTable.hpp"
 #include "storage/tableiterator.h"
 #include "storage/tablefactory.h"
 #include "storage/temptable.h"
-
-#include "boost/unordered_set.hpp"
-#include "boost/unordered_map.hpp"
 
 namespace voltdb {
 

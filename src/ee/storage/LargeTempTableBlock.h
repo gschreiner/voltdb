@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2017 VoltDB Inc.
+ * Copyright (C) 2008-2018 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -18,8 +18,16 @@
 #ifndef VOLTDB_LARGETEMPTABLEBLOCK_HPP
 #define VOLTDB_LARGETEMPTABLEBLOCK_HPP
 
+#include <iterator>
 #include <memory>
 #include <utility>
+
+#include "boost/foreach.hpp"
+#include "boost/mpl/if.hpp"
+#include "boost/range.hpp"
+
+#include "common/LargeTempTableBlockId.hpp"
+#include "common/tabletuple.h"
 
 namespace voltdb {
 
@@ -45,7 +53,13 @@ class TupleSchema;
  * the tuples will need to be updated).
  */
 class LargeTempTableBlock {
- public:
+public:
+
+    template<bool IsConst>
+    class LttBlockIterator;
+
+    typedef LttBlockIterator<false> iterator;
+    typedef LttBlockIterator<true> const_iterator;
 
     /** The size of all large temp table blocks.  Some notes about
         block size:
@@ -58,11 +72,21 @@ class LargeTempTableBlock {
     */
     static const size_t BLOCK_SIZE_IN_BYTES = 8 * 1024 * 1024; // 8 MB
 
+    /** Each block has a header of 12 bytes:
+        - 8 bytes for the address of the block in memory.  This is needed
+          when loading a block from disk back into memory, to update pointers
+          to non-inlined string data
+        - 4 bytes for the number of tuples in the block.
+        This information is redundant (this class contains a separate tuple count),
+        but needed for when we serialize data to disk.
+    */
+    static const size_t HEADER_SIZE = 8 + 4;
+
     /** constructor for a new block. */
-    LargeTempTableBlock(int64_t id, TupleSchema* schema);
+    LargeTempTableBlock(LargeTempTableBlockId id, const TupleSchema* schema);
 
     /** Return the unique ID for this block */
-    int64_t id() const {
+    LargeTempTableBlockId id() const {
         return m_id;
     }
 
@@ -82,8 +106,13 @@ class LargeTempTableBlock {
     }
 
     /** Return a pointer to the storage for this block. */
-    char* address() {
-        return m_storage.get();
+    char* tupleStorage() const {
+        return (m_storage.get() + HEADER_SIZE);
+    }
+
+    /** Return a pointer to the storage for this block. (not const) */
+    char* tupleStorage() {
+        return (m_storage.get() + HEADER_SIZE);
     }
 
     /** Returns the amount of memory used by this block.  For blocks
@@ -91,7 +120,7 @@ class LargeTempTableBlock {
         BLOCK_SIZE_IN_BYTES, and zero otherwise.
         Note that this value may not be equal to
         getAllocatedTupleMemory() + getAllocatedPoolMemory() because
-        of unused space at the middle of the block. */
+        of the block header and unused space at the middle of the block. */
     int64_t getAllocatedMemory() const;
 
     /** Return the number of bytes used to store tuples in this
@@ -108,7 +137,7 @@ class LargeTempTableBlock {
 
     /** Set the storage associated with this block (as when loading
         from disk) */
-    void setData(char* origAddress, std::unique_ptr<char[]> storage);
+    void setData(std::unique_ptr<char[]> storage);
 
     /** Returns true if this block is pinned in the cache and may not
         be stored to disk (i.e., we are currently inserting tuples
@@ -140,6 +169,10 @@ class LargeTempTableBlock {
         return m_isStored;
     }
 
+    void unstore() {
+        m_isStored = false;
+    }
+
     /** Return the number of tuples in this block */
     int64_t activeTupleCount() const {
         return m_activeTupleCount;
@@ -150,10 +183,32 @@ class LargeTempTableBlock {
         return m_schema;
     }
 
-    /** Return the schema of the tuples in this block (non-const version) */
-    TupleSchema* schema() {
-        return m_schema;
+    /** Swap the contents of the two blocks.  It's up to the caller to
+        invalidate any copies of this block on disk. */
+    void swap(LargeTempTableBlock* otherBlock) {
+        assert(m_schema->isCompatibleForMemcpy(otherBlock->m_schema));
+        // id should stay the same
+        // m_schema is the same
+        m_storage.swap(otherBlock->m_storage);
+        std::swap(m_tupleInsertionPoint, otherBlock->m_tupleInsertionPoint);
+        std::swap(m_nonInlinedInsertionPoint, otherBlock->m_nonInlinedInsertionPoint);
+        std::swap(m_activeTupleCount, otherBlock->m_activeTupleCount);
     }
+
+    /** Clear all the data out of this block. */
+    void clearForTest() {
+        m_tupleInsertionPoint = tupleStorage();
+        m_nonInlinedInsertionPoint = m_storage.get() + BLOCK_SIZE_IN_BYTES;
+        m_activeTupleCount = 0;
+    }
+
+    LargeTempTableBlock::iterator begin();
+    LargeTempTableBlock::const_iterator begin() const;
+    LargeTempTableBlock::const_iterator cbegin() const;
+
+    LargeTempTableBlock::iterator end();
+    LargeTempTableBlock::const_iterator end() const;
+    LargeTempTableBlock::const_iterator cend() const;
 
     /** This debug method will skip printing non-inlined strings (will
         just print their address) to avoid a SEGV when debugging. */
@@ -163,13 +218,48 @@ class LargeTempTableBlock {
         cause a crash if the StringRef pointer is invalid. */
     std::string debugUnsafe() const;
 
+    struct Tuple {
+
+        TableTuple toTableTuple(const TupleSchema* schema) {
+            return TableTuple(reinterpret_cast<char*>(this), schema);
+        }
+
+        const TableTuple toTableTuple(const TupleSchema* schema) const {
+            return TableTuple(reinterpret_cast<char*>(const_cast<Tuple*>(this)), schema);
+        }
+
+        Tuple(const Tuple&) = delete;
+        Tuple& operator=(const Tuple&) = delete;
+
+        char m_statusByte;
+        char m_tupleData[];
+    };
+
  private:
 
+    /** Return a pointer to the first 8-byte word in the buffer.
+     * This is the original address of the buffer when it gets
+     * saved and reloaded from disk.  When this word is not equal to
+     * the buffers current address, string pointers in the tuples
+     * must be updated to reflect the buffer's new location
+     * */
+    char** getStorageAddressPointer() {
+        return reinterpret_cast<char**>(&(m_storage[0]));
+    }
+
+    /**
+     * Return the address of 4-byte integer in the block header that
+     * contains the tuple count for the block.
+     */
+    int32_t* getStorageTupleCount() const {
+        return reinterpret_cast<int32_t*>(&(m_storage[sizeof(char*)]));
+    }
+
     /** the ID of this block */
-    int64_t m_id;
+    LargeTempTableBlockId m_id;
 
     /** the schema for the data (owned by the table) */
-    TupleSchema * m_schema;
+    const TupleSchema * m_schema;
 
     /** Pointer to block storage */
     std::unique_ptr<char[]> m_storage;
@@ -192,10 +282,168 @@ class LargeTempTableBlock {
         Blocks that are resident and also stored can be evicted without doing any I/O. */
     bool m_isStored;
 
-    /** Number of tuples currently in this block */
+    /**
+     * Number of tuples currently in this block.  This is also stored in the tuple
+     * block storage itself.  These two values need to be kept in sync.
+     */
     int64_t m_activeTupleCount;
 };
 
+template<bool IsConst>
+class LargeTempTableBlock::LttBlockIterator {
+public:
+
+    friend class LargeTempTableBlock::LttBlockIterator<true>;
+    typedef std::random_access_iterator_tag iterator_category;
+    typedef LargeTempTableBlock::Tuple value_type;
+    typedef std::ptrdiff_t difference_type;
+    typedef typename boost::mpl::if_c<IsConst, const value_type&, value_type&>::type reference;
+    typedef typename boost::mpl::if_c<IsConst, const value_type*, value_type*>::type pointer;
+
+    LttBlockIterator()
+        : m_tupleLength(0)
+        , m_tupleAddress(NULL)
+    {
+    }
+
+     LttBlockIterator(const TupleSchema* schema, char* storage)
+        : m_tupleLength(schema->tupleLength() + TUPLE_HEADER_SIZE)
+        , m_tupleAddress(storage)
+    {
+    }
+
+     LttBlockIterator(int tupleLength, char* storage)
+         : m_tupleLength(tupleLength)
+         , m_tupleAddress(storage)
+    {
+    }
+
+    // You can convert a regular iterator to a const_iterator
+    operator LttBlockIterator<true>() const {
+        return LttBlockIterator<true>(m_tupleLength, m_tupleAddress);
+    }
+
+    bool operator==(const LttBlockIterator& that) const {
+        return m_tupleAddress == that.m_tupleAddress;
+    }
+
+    bool operator!=(const LttBlockIterator& that) const {
+        return m_tupleAddress != that.m_tupleAddress;
+    }
+
+    reference operator*() {
+        LttBlockIterator::pointer tuple = reinterpret_cast<pointer>(m_tupleAddress);
+        return *tuple;
+    }
+
+    pointer operator->() {
+        LttBlockIterator::pointer tuple = reinterpret_cast<pointer>(m_tupleAddress);
+        return tuple;
+    }
+
+    // pre-increment
+    LttBlockIterator& operator++() {
+        m_tupleAddress += m_tupleLength;
+        return *this;
+    }
+
+    // post-increment
+    LttBlockIterator operator++(int) {
+        LttBlockIterator orig = *this;
+        ++(*this);
+        return orig;
+    }
+
+    // pre-decrement
+    LttBlockIterator& operator--() {
+        m_tupleAddress -= m_tupleLength;
+        return *this;
+    }
+
+    // post-decrement
+    LttBlockIterator operator--(int) {
+        LttBlockIterator orig = *this;
+        --(*this);
+        return orig;
+    }
+
+    LttBlockIterator& operator+=(difference_type n) {
+        m_tupleAddress += (n * m_tupleLength);
+        return *this;
+    }
+
+    LttBlockIterator& operator-=(difference_type n) {
+        m_tupleAddress -= (n * m_tupleLength);
+        return *this;
+    }
+
+    LttBlockIterator operator+(difference_type n) {
+        LttBlockIterator it{*this};
+        it += n;
+        return it;
+    }
+
+    LttBlockIterator operator-(difference_type n) {
+        LttBlockIterator it{*this};
+        it -= n;
+        return it;
+    }
+
+    difference_type operator-(const LttBlockIterator& that) {
+        std::ptrdiff_t ptrdiff = m_tupleAddress - that.m_tupleAddress;
+        return ptrdiff / m_tupleLength;
+    }
+
+    reference operator[](difference_type n) {
+        LttBlockIterator temp{*this + n};
+        return *temp;
+    }
+
+    // relational operators
+    bool operator>(const LttBlockIterator& that) {
+        return m_tupleAddress > that.m_tupleAddress;
+    }
+
+    bool operator<(const LttBlockIterator& that) {
+        return m_tupleAddress < that.m_tupleAddress;
+    }
+
+    bool operator>=(const LttBlockIterator& that) {
+        return m_tupleAddress >= that.m_tupleAddress;
+    }
+
+    bool operator<=(const LttBlockIterator& that) {
+        return m_tupleAddress <= that.m_tupleAddress;
+    }
+
+private:
+
+    int m_tupleLength;
+    char * m_tupleAddress;
+};
+
+template<bool IsConst>
+inline LargeTempTableBlock::LttBlockIterator<IsConst> operator+(typename LargeTempTableBlock::LttBlockIterator<IsConst>::difference_type n,
+                                                                LargeTempTableBlock::LttBlockIterator<IsConst> it) {
+    return it + n;
+}
+
 } // end namespace voltdb
+
+// Make LargeTempTableBlock::iterator work with BOOST_FOREACH
+namespace boost {
+
+template<>
+struct range_mutable_iterator<voltdb::LargeTempTableBlock> {
+    typedef voltdb::LargeTempTableBlock::iterator type;
+};
+
+template<>
+struct range_const_iterator<voltdb::LargeTempTableBlock> {
+    typedef voltdb::LargeTempTableBlock::const_iterator type;
+};
+
+} // end namespace boost
+
 
 #endif // VOLTDB_LARGETEMPTABLEBLOCK_HPP
