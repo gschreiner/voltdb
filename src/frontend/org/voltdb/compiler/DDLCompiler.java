@@ -291,6 +291,7 @@ public class DDLCompiler {
         }
 
         protected static final String TABLE = "TABLE";
+        protected static final String VERTICAL = "VERTICAL";
         protected static final String PROCEDURE = "PROCEDURE";
         protected static final String FUNCTION = "FUNCTION";
         protected static final String PARTITION = "PARTITION";
@@ -734,6 +735,8 @@ public class DDLCompiler {
             String tableName = table.getTypeName();
 
             if (m_tracker.m_partitionMap.containsKey(tableName.toLowerCase())) {
+
+            	//TODO CHANGE THIS PART TO SUPPORT DIFERENT TYPES OF PARTITIONING
                 String colName = m_tracker.m_partitionMap.get(tableName.toLowerCase());
                 // A null column name indicates a replicated table. Ignore it here
                 // because it defaults to replicated in the catalog.
@@ -744,6 +747,8 @@ public class DDLCompiler {
                                 + "Invalid PARTITION statement on view table " + tableName + ".";
                         throw m_compiler.new VoltCompilerException(msg);
                     }
+
+                    //
 
                     final Column partitionCol = table.getColumns().getIgnoreCase(colName);
                     // make sure the column exists
@@ -886,9 +891,15 @@ public class DDLCompiler {
             if (e.name.equals("table")) {
                 String tableName = e.attributes.get("name");
                 String partitionCol = e.attributes.get("partitioncolumn");
+                String verticalPartitionCols = e.attributes.get("verticalpartcolumns");
                 String export = e.attributes.get("export");
                 String drTable = e.attributes.get("drTable");
-                if (partitionCol != null) {
+
+                //TODO add new feature for multiple levels of partitions, simple mapping is doed by now.
+                if (verticalPartitionCols != null) {
+                    m_tracker.addPartition(tableName, verticalPartitionCols);
+                }
+                else if (partitionCol != null) {
                     m_tracker.addPartition(tableName, partitionCol);
                 }
                 else {
@@ -1252,6 +1263,7 @@ public class DDLCompiler {
         final boolean isStream = (node.attributes.get("stream") != null);
         final String streamTarget = node.attributes.get("export");
         final String streamPartitionColumn = node.attributes.get("partitioncolumn");
+        final String streamVerticalPartitionColumn = node.attributes.get("verticalpartcolumns");
         // all tables start replicated
         // if a partition is found in the project file later,
         //  then this is reversed

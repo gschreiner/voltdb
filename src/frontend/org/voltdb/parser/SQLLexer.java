@@ -56,6 +56,7 @@ public class SQLLexer extends SQLPatternFactory
         new VerbToken("drop", true),
         new VerbToken("export", true),
         new VerbToken("partition", true),
+        new VerbToken("partition vertical", true),
         new VerbToken("dr", true),
         new VerbToken("set", true),
         // Unsupported verbs

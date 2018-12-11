@@ -96,7 +96,7 @@ public class SQLParser extends SQLPatternFactory
     private static final Pattern PAT_PARTITION_ANY_PREAMBLE =
             SPF.statement(
                 SPF.token("partition"),
-                SPF.capture(SPF.tokenAlternatives("procedure", "table")),
+                SPF.capture(SPF.tokenAlternatives("procedure", "table", "vertical")),
                 SPF.anyClause()
             ).compile("PAT_PARTITION_ANY_PREAMBLE");
 
@@ -114,6 +114,22 @@ public class SQLParser extends SQLPatternFactory
             SPF.token("partition"), SPF.token("table"), SPF.capture(SPF.databaseObjectName()),
             SPF.token("on"), SPF.token("column"), SPF.capture(SPF.databaseObjectName())
         ).compile("PAT_PARTITION_TABLE");
+
+    /**
+     * Pattern: PARTITION TABLE tablename ON COLUMN columnname
+     *
+     * NB supports only unquoted table and column names
+     *
+     * Capture groups:
+     *  (1) table name
+     *  (2) column name
+     */
+    private static final Pattern PAT_PARTITION_VERTICAL_TABLE =
+        SPF.statement(
+            SPF.token("partition"), SPF.token("vertical"), SPF.token("table"), SPF.capture(SPF.databaseObjectName()),
+            SPF.token("on"), SPF.token("column"), SPF.capture(SPF.multipleDatabaseObjectName())
+        ).compile("PAT_PARTITION_VERTICAL_TABLE");
+
 
     /**
      * PARTITION PROCEDURE procname ON TABLE tablename COLUMN columnname [PARAMETER paramnum]
@@ -737,6 +753,16 @@ public class SQLParser extends SQLPatternFactory
     public static Matcher matchPartitionTable(String statement)
     {
         return PAT_PARTITION_TABLE.matcher(statement);
+    }
+
+    /**
+     * Match statement against pattern for partition VERTICAL table statement
+     * @param statement  statement to match against
+     * @return           pattern matcher object
+     */
+    public static Matcher matchPartitionVerticalTable(String statement)
+    {
+        return PAT_PARTITION_VERTICAL_TABLE.matcher(statement);
     }
 
     /**

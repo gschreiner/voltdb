@@ -51,8 +51,9 @@ public class PartitionStatement extends StatementProcessor {
         String partitionee = statementMatcher.group(1).toUpperCase();
         if (TABLE.equals(partitionee)) {
             return processPartitionTable(ddlStatement.statement);
-        }
-        else if (PROCEDURE.equals(partitionee)) {
+        } else if (VERTICAL.equals(partitionee)) {
+            return processPartitionVertical(ddlStatement.statement);
+        } else if (PROCEDURE.equals(partitionee)) {
             return processPartitionProcedure(ddlStatement, whichProcs);
         }
         // can't get here as regex only matches for PROCEDURE or TABLE
@@ -75,6 +76,36 @@ public class PartitionStatement extends StatementProcessor {
         VoltXMLElement tableXML = m_schema.findChild("table", tableName.toUpperCase());
         if (tableXML != null) {
             tableXML.attributes.put("partitioncolumn", columnName.toUpperCase());
+            // Column validity check done by VoltCompiler in post-processing
+
+            // mark the table as dirty for the purposes of caching sql statements
+            m_compiler.markTableAsDirty(tableName);
+        }
+        else {
+            throw m_compiler.new VoltCompilerException(String.format(
+                        "Invalid PARTITION statement: table %s does not exist", tableName));
+        }
+        return true;
+    }
+
+    private boolean processPartitionVertical(String statement) throws VoltCompilerException {
+        // matches if it is PARTITION VERTICAL TABLE <table> ON COLUMN <column>
+        Matcher statementMatcher = SQLParser.matchPartitionVerticalTable(statement);
+
+        if ( ! statementMatcher.matches()) {
+            throw m_compiler.new VoltCompilerException(String.format(
+                    "Invalid PARTITION statement: \"%s\", " +
+                    "expected syntax: PARTITION VERTICAL TABLE <table> ON COLUMN <column>",
+                    statement.substring(0,statement.length()-1))); // remove trailing semicolon
+        }
+        // group(1) -> table, group(2) -> column
+        String tableName = checkIdentifierStart(statementMatcher.group(1), statement);
+        String columnsName = checkIdentifierStart(statementMatcher.group(2), statement);
+        String []columns = columnsName.split(",");
+       // for (int ii=0; i < columns.length; ii++) {
+        	VoltXMLElement tableXML = m_schema.findChild("table", tableName.toUpperCase());
+        	if (tableXML != null) {
+            tableXML.attributes.put("verticalpartcolumns", columnsName.toUpperCase());
             // Column validity check done by VoltCompiler in post-processing
 
             // mark the table as dirty for the purposes of caching sql statements

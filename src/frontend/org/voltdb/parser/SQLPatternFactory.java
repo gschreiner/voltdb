@@ -170,6 +170,12 @@ public class SQLPatternFactory
             return new SQLPatternPartElement("[\\w$]+");
         }
 
+        public static SQLPatternPart multipleDatabaseObjectName()
+        {
+            //TODO: Does not recognize quoted identifiers.
+            return new SQLPatternPartElement("[\\w+(\\s*,\\s*\\w+)*$]+");
+        }
+
         public static SQLPatternPart databaseObjectTypeName()
         {
             return new SQLPatternPartElement("[a-z][a-z]*");

@@ -177,6 +177,7 @@ public class ExpressionWindowed extends Expression {
         if (m_partitionByList.size() > 0) {
             sb.append(Tokens.T_PARTITION + ' ' + Tokens.T_BY + ' ');
             String sep = "";
+            System.out.println("\n\n--> Passou pela parte de particionamento!! \n\n");
             for (int idx = 0; idx < m_partitionByList.size(); idx += 1) {
                 Expression expr = m_partitionByList.get(idx);
                 sb.append(sep)

@@ -71,6 +71,7 @@ public class VoltDDLElementTracker {
      * @param tableName table name
      * @param colName column name
      */
+    //FIXME change the map form for track partitions movements
     void addPartition(String tableName, String colName)
     {
         if (m_partitionMap.containsKey(tableName.toLowerCase())) {

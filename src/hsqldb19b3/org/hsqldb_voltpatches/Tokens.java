@@ -95,7 +95,8 @@ public class Tokens {
     static final String        T_COLLATE          = "COLLATE";
     static final String        T_COLLECT          = "COLLECT";
     static final String        T_COLUMN           = "COLUMN";
-    public static final String T_COMMIT           = "COMMIT";
+    static final String        T_COLUMNS           = "COLUMNS";
+     public static final String T_COMMIT           = "COMMIT";
     static final String        T_CONDITION        = "CONDIITON";
     public static final String T_CONNECT          = "CONNECT";
     public static final String T_CONSTRAINT       = "CONSTRAINT";

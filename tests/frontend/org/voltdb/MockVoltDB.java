@@ -388,7 +388,9 @@ public class MockVoltDB implements VoltDBInterface
     @Override
     public void initialize(Configuration config)
     {
-        m_noLoadLib = config.m_noLoadLibVOLTDB;
+        System.out.println("\n\nRodando o Mock\n");
+
+    	m_noLoadLib = config.m_noLoadLibVOLTDB;
         voltconfig = config;
     }
 

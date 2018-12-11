@@ -777,6 +777,7 @@ public class RealVoltDB implements VoltDBInterface, RestoreAgent.Callback, HostM
      */
     @Override
     public void initialize(Configuration config) {
+    	 System.out.println("\n\nRodando o Real\n");
         hostLog.info("PID of this Volt process is " + CLibrary.getpid());
         ShutdownHooks.enableServerStopLogging();
         synchronized(m_startAndStopLock) {
