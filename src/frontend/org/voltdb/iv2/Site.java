@@ -88,6 +88,7 @@ import org.voltdb.dtxn.SiteTracker;
 import org.voltdb.dtxn.TransactionState;
 import org.voltdb.dtxn.UndoAction;
 import org.voltdb.exceptions.EEException;
+import org.voltdb.export.ExportManager;
 import org.voltdb.jni.ExecutionEngine;
 import org.voltdb.jni.ExecutionEngine.EventType;
 import org.voltdb.jni.ExecutionEngine.TaskType;
@@ -101,7 +102,7 @@ import org.voltdb.messaging.Iv2InitiateTaskMessage;
 import org.voltdb.rejoin.TaskLog;
 import org.voltdb.settings.ClusterSettings;
 import org.voltdb.settings.NodeSettings;
-import org.voltdb.sysprocs.LowImpactDelete.ComparisonOperation;
+import org.voltdb.sysprocs.LowImpactDeleteNT.ComparisonOperation;
 import org.voltdb.sysprocs.SysProcFragmentId;
 import org.voltdb.utils.CompressionService;
 import org.voltdb.utils.LogKeys;
@@ -552,19 +553,19 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
         }
 
         @Override
-        public void initDRAppliedTracker(Map<Byte, Integer> clusterIdToPartitionCountMap, boolean hasReplicatedStream) {
+        public void initDRAppliedTracker(Map<Byte, Integer> clusterIdToPartitionCountMap) {
             for (Map.Entry<Byte, Integer> entry : clusterIdToPartitionCountMap.entrySet()) {
                 int producerClusterId = entry.getKey();
                 Map<Integer, DRSiteDrIdTracker> clusterSources =
                         m_maxSeenDrLogsBySrcPartition.getOrDefault(producerClusterId, new HashMap<>());
-                if (hasReplicatedStream && !clusterSources.containsKey(MpInitiator.MP_INIT_PID)) {
+                if (!clusterSources.containsKey(MpInitiator.MP_INIT_PID)) {
                     DRSiteDrIdTracker tracker =
                             DRConsumerDrIdTracker.createSiteTracker(0,
                                     DRLogSegmentId.makeEmptyDRId(producerClusterId),
                                     Long.MIN_VALUE, Long.MIN_VALUE, MpInitiator.MP_INIT_PID);
                     clusterSources.put(MpInitiator.MP_INIT_PID, tracker);
                 }
-                int oldProducerPartitionCount = clusterSources.size() - (clusterSources.containsKey(MpInitiator.MP_INIT_PID) ? 1 : 0);
+                int oldProducerPartitionCount = clusterSources.size() - 1;
                 int newProducerPartitionCount = entry.getValue();
                 assert(oldProducerPartitionCount >= 0);
                 assert(newProducerPartitionCount != -1);
@@ -722,6 +723,7 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
         ExecutionEngine eeTemp = null;
         Deployment deploy = m_context.cluster.getDeployment().get("deployment");
         final int defaultDrBufferSize = Integer.getInteger("DR_DEFAULT_BUFFER_SIZE", 512 * 1024); // 512KB
+        final int exportFlushTimeout = Integer.getInteger("MAX_EXPORT_BUFFER_FLUSH_INTERVAL", 4*1000);
         int tempTableMaxSize = deploy.getSystemsettings().get("systemsettings").getTemptablemaxsize();
         if (System.getProperty("TEMP_TABLE_MAX_SIZE") != null) {
             // Allow a system property to override the deployment setting
@@ -730,7 +732,8 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
         }
 
         try {
-            if (m_backend == BackendTarget.NATIVE_EE_JNI) {
+            // NATIVE_EE_JNI and NATIVE_EE_LARGE_JNI
+            if (m_backend.isDefaultJNITarget) {
                 eeTemp =
                     new ExecutionEngineJNI(
                         m_context.cluster.getRelativeIndex(),
@@ -743,7 +746,8 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
                         defaultDrBufferSize,
                         tempTableMaxSize,
                         hashinatorConfig,
-                        m_isLowestSiteId);
+                        m_isLowestSiteId,
+                        exportFlushTimeout);
             }
             else if (m_backend == BackendTarget.NATIVE_EE_SPY_JNI){
                 Class<?> spyClass = Class.forName("org.mockito.Mockito");
@@ -759,10 +763,11 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
                         defaultDrBufferSize,
                         tempTableMaxSize,
                         hashinatorConfig,
-                        m_isLowestSiteId);
+                        m_isLowestSiteId,
+                        exportFlushTimeout);
                 eeTemp = (ExecutionEngine) spyMethod.invoke(null, internalEE);
             }
-            else {
+            else if (m_backend.isIPC) {
                 // set up the EE over IPC
                 eeTemp =
                     new ExecutionEngineIPC(
@@ -778,7 +783,14 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
                             m_backend,
                             VoltDB.instance().getConfig().m_ipcPort,
                             hashinatorConfig,
-                            m_isLowestSiteId);
+                            m_isLowestSiteId,
+                            exportFlushTimeout);
+            }
+            else {
+                /* This seems very bad. */
+                throw new VoltAbortException(
+                        String.format("Unexpected BackendTarget value %s", m_backend)
+                );
             }
             eeTemp.loadCatalog(m_startupConfig.m_timestamp, m_startupConfig.m_serializedCatalog);
             eeTemp.setBatchTimeout(m_context.cluster.getDeployment().get("deployment").
@@ -846,7 +858,9 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
                         //If there are no tasks, do task log work
                         didWork = replayFromTaskLog(mrm);
                     }
-                    if (!didWork) Thread.yield();
+                    if (!didWork) {
+                        Thread.yield();
+                    }
                 } else {
                     SiteTasker task = m_scheduler.take();
                     task.runForRejoin(getSiteProcedureConnection(), m_rejoinTaskLog);
@@ -1115,6 +1129,11 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
     }
 
     @Override
+    public void setViewsEnabled(String viewNames, boolean enabled) {
+        m_ee.setViewsEnabled(viewNames, enabled);
+    }
+
+    @Override
     public Map<Integer, List<VoltTable>> recursableRun(
             TransactionState currentTxnState)
     {
@@ -1136,17 +1155,21 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
      * @param undo
      */
     private static void handleUndoLog(List<UndoAction> undoLog, boolean undo) {
-        if (undoLog == null) return;
+        if (undoLog == null) {
+            return;
+        }
 
         for (final ListIterator<UndoAction> iterator = undoLog.listIterator(undoLog.size()); iterator.hasPrevious();) {
             final UndoAction action = iterator.previous();
-            if (undo)
+            if (undo) {
                 action.undo();
-            else
+            } else {
                 action.release();
+            }
         }
-        if (undo)
+        if (undo) {
             undoLog.clear();
+        }
     }
 
     private void setLastCommittedSpHandle(long spHandle)
@@ -1161,7 +1184,8 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
     }
 
     @Override
-    public void truncateUndoLog(boolean rollback, long beginUndoToken, long spHandle, List<UndoAction> undoLog)
+    public void truncateUndoLog(boolean rollback, boolean isEmptyDRTxn, long beginUndoToken,
+            long spHandle, List<UndoAction> undoLog)
     {
         // Set the last committed txnId even if there is nothing to undo, as long as the txn is not rolling back.
         if (!rollback) {
@@ -1171,7 +1195,9 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
         //Any new txnid will create a new undo quantum, including the same txnid again
         m_latestUndoTxnId = Long.MIN_VALUE;
         //If the begin undo token is not set the txn never did any work so there is nothing to undo/release
-        if (beginUndoToken == Site.kInvalidUndoToken) return;
+        if (beginUndoToken == Site.kInvalidUndoToken) {
+            return;
+        }
         if (rollback) {
             m_ee.undoUndoToken(beginUndoToken);
         }
@@ -1179,7 +1205,7 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
             assert(m_latestUndoToken != Site.kInvalidUndoToken);
             assert(m_latestUndoToken >= beginUndoToken);
             if (m_latestUndoToken > beginUndoToken) {
-                m_ee.releaseUndoToken(m_latestUndoToken);
+                m_ee.releaseUndoToken(m_latestUndoToken, isEmptyDRTxn);
             }
         }
 
@@ -1242,7 +1268,9 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
 
     @Override
     public void setDRSequenceNumbers(Long partitionSequenceNumber, Long mpSequenceNumber) {
-        if (partitionSequenceNumber == null && mpSequenceNumber == null) return;
+        if (partitionSequenceNumber == null && mpSequenceNumber == null) {
+            return;
+        }
         ByteBuffer paramBuffer = m_ee.getParamBufferForExecuteTask(16);
         paramBuffer.putLong(partitionSequenceNumber != null ? partitionSequenceNumber : Long.MIN_VALUE);
         paramBuffer.putLong(mpSequenceNumber != null ? mpSequenceNumber : Long.MIN_VALUE);
@@ -1456,6 +1484,9 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
                     sequenceNumbers.getSecond(),
                     m_partitionId,
                     catalogTable.getSignature());
+            // assign the stats to the other partition's value
+            ExportManager.instance().updateInitialExportStateToSeqNo(m_partitionId, catalogTable.getSignature(),
+                    false, sequenceNumbers.getSecond());
         }
 
         if (drSequenceNumbers != null) {
@@ -1718,19 +1749,38 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
     }
 
     @Override
-    public void setProcedureName(String procedureName) {
-        m_ee.setProcedureName(procedureName);
+    public void setupProcedure(String procedureName) {
+        m_ee.setupProcedure(procedureName);
     }
 
     @Override
-    public long applyBinaryLog(long txnId, long spHandle,
-                               long uniqueId, int remoteClusterId, int remotePartitionId,
-                               byte log[]) throws EEException {
-        ByteBuffer paramBuffer = m_ee.getParamBufferForExecuteTask(4 + log.length);
+    public void completeProcedure() {
+        m_ee.completeProcedure();
+    }
+
+    @Override
+    public void notifyOfSnapshotNonce(String nonce, long snapshotSpHandle) {
+        m_initiatorMailbox.notifyOfSnapshotNonce(nonce, snapshotSpHandle);
+    }
+
+    @Override
+    public long applyBinaryLog(long txnId, long spHandle, long uniqueId, int remoteClusterId, byte log[])
+            throws EEException {
+        ByteBuffer paramBuffer = m_ee.getParamBufferForExecuteTask(Integer.BYTES * 2 + log.length);
+        paramBuffer.putInt(1);
         paramBuffer.putInt(log.length);
         paramBuffer.put(log);
         return m_ee.applyBinaryLog(paramBuffer, txnId, spHandle, m_lastCommittedSpHandle, uniqueId,
-                            remoteClusterId, remotePartitionId, getNextUndoToken(m_currentTxnId));
+                remoteClusterId, getNextUndoToken(m_currentTxnId));
+    }
+
+    @Override
+    public long applyMpBinaryLog(long txnId, long spHandle, long uniqueId, int remoteClusterId, byte logs[])
+            throws EEException {
+        ByteBuffer paramBuffer = m_ee.getParamBufferForExecuteTask(logs.length);
+        paramBuffer.put(logs);
+        return m_ee.applyBinaryLog(paramBuffer, txnId, spHandle, m_lastCommittedSpHandle, uniqueId,
+                remoteClusterId, getNextUndoToken(m_currentTxnId));
     }
 
     @Override
@@ -1759,19 +1809,13 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
     }
 
     @Override
-    public void generateElasticChangeEvents(int oldPartitionCnt, int newPartitionCnt, long txnId, long spHandle, long uniqueId) {
-//        Enable this code and fix up generateDREvent in DRTuplestream once the DR ReplicatedTable Stream has been removed
-//        if (m_partitionId >= oldPartitionCnt) {
-//            generateDREvent(
-//                    EventType.DR_STREAM_START, uniqueId, m_lastCommittedSpHandle, spHandle, new byte[0]);
-//        }
-//        else {
-            ByteBuffer paramBuffer = ByteBuffer.allocate(8);
-            paramBuffer.putInt(oldPartitionCnt);
-            paramBuffer.putInt(newPartitionCnt);
-            generateDREvent(
-                    EventType.DR_ELASTIC_CHANGE, txnId, uniqueId, m_lastCommittedSpHandle, spHandle, paramBuffer.array());
-//        }
+    public void generateElasticChangeEvents(int oldPartitionCnt, int newPartitionCnt, long txnId, long spHandle,
+            long uniqueId) {
+        ByteBuffer paramBuffer = ByteBuffer.allocate(8);
+        paramBuffer.putInt(oldPartitionCnt);
+        paramBuffer.putInt(newPartitionCnt);
+        generateDREvent(EventType.DR_ELASTIC_CHANGE, txnId, uniqueId, m_lastCommittedSpHandle, spHandle,
+                paramBuffer.array());
     }
 
     @Override
@@ -1784,6 +1828,7 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
                 EventType.DR_ELASTIC_REBALANCE, txnId, uniqueId, m_lastCommittedSpHandle, spHandle, paramBuffer.array());
     }
 
+    @Override
     public void setDRStreamEnd(long txnId, long spHandle, long uniqueId) {
         generateDREvent(
                 EventType.DR_STREAM_END, txnId, uniqueId, m_lastCommittedSpHandle, spHandle, new byte[0]);

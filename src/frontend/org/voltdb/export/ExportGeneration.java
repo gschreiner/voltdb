@@ -22,10 +22,12 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.stream.Collectors;
 
 import org.apache.zookeeper_voltpatches.AsyncCallback;
 import org.apache.zookeeper_voltpatches.CreateMode;
@@ -33,6 +35,7 @@ import org.apache.zookeeper_voltpatches.KeeperException;
 import org.apache.zookeeper_voltpatches.WatchedEvent;
 import org.apache.zookeeper_voltpatches.Watcher;
 import org.apache.zookeeper_voltpatches.ZooDefs.Ids;
+import org.hsqldb_voltpatches.lib.StringUtil;
 import org.voltcore.logging.VoltLogger;
 import org.voltcore.messaging.BinaryPayloadMessage;
 import org.voltcore.messaging.HostMessenger;
@@ -43,18 +46,22 @@ import org.voltcore.utils.DBBPool;
 import org.voltcore.utils.Pair;
 import org.voltcore.zk.ZKUtil;
 import org.voltdb.CatalogContext;
+import org.voltdb.ExportStatsBase.ExportStatsRow;
+import org.voltdb.RealVoltDB;
 import org.voltdb.VoltDB;
+import org.voltdb.VoltTable;
 import org.voltdb.VoltZK;
 import org.voltdb.catalog.CatalogMap;
 import org.voltdb.catalog.Connector;
 import org.voltdb.catalog.ConnectorTableInfo;
 import org.voltdb.catalog.Table;
 import org.voltdb.common.Constants;
-import org.voltdb.iv2.TxnEgo;
+import org.voltdb.iv2.SpInitiator;
 import org.voltdb.messaging.LocalMailbox;
+import org.voltdb.sysprocs.ExportControl.OperationMode;
 
-import com.google_voltpatches.common.base.Throwables;
 import com.google_voltpatches.common.collect.ImmutableList;
+import com.google_voltpatches.common.collect.Sets;
 import com.google_voltpatches.common.util.concurrent.Futures;
 import com.google_voltpatches.common.util.concurrent.ListenableFuture;
 import com.google_voltpatches.common.util.concurrent.ListeningExecutorService;
@@ -81,10 +88,9 @@ public class ExportGeneration implements Generation {
      */
     private final Map<Integer, Map<String, ExportDataSource>> m_dataSourcesByPartition
             =        new HashMap<Integer, Map<String, ExportDataSource>>();
-    @Override
-    public Map<Integer, Map<String, ExportDataSource>> getDataSourceByPartition() {
-        return m_dataSourcesByPartition;
-    }
+
+    // Export generation mailboxes under the same partition id, excludes the local one.
+    private Map<Integer, ImmutableList<Long>> m_replicasHSIds = new HashMap<>();
 
     private Mailbox m_mbox = null;
 
@@ -111,8 +117,24 @@ public class ExportGeneration implements Generation {
         }
     }
 
-    void initializeGenerationFromDisk(HostMessenger messenger) {
-        Set<Integer> partitions = new HashSet<Integer>();
+    void initialize(HostMessenger messenger,
+            int hostId,
+            CatalogContext catalogContext,
+            final CatalogMap<Connector> connectors,
+            List<Pair<Integer, Integer>> localPartitionsToSites,
+            File exportOverflowDirectory)
+    {
+        File files[] = exportOverflowDirectory.listFiles();
+        if (files != null) {
+            initializeGenerationFromDisk(messenger, files, localPartitionsToSites);
+        }
+        initializeGenerationFromCatalog(catalogContext, connectors, hostId, messenger, localPartitionsToSites);
+
+    }
+
+    private void initializeGenerationFromDisk(HostMessenger messenger,
+            File[] files, List<Pair<Integer, Integer>> localPartitionsToSites) {
+        List<Integer> onDiskPartitions = new ArrayList<Integer>();
 
         /*
          * Find all the data files. Once one is found, extract the nonce
@@ -120,20 +142,21 @@ public class ExportGeneration implements Generation {
          * there are orphaned advertisements, delete them.
          */
         Map<String, File> dataFiles = new HashMap<>();
-        File[] files = m_directory.listFiles();
         for (File data: files) {
-            if (!data.getName().endsWith(".ad")) {
-                String nonce = data.getName().substring(0, data.getName().length() - 3);
+            if (data.getName().endsWith(".pbd")) {
+                // Naming convention for pdb file, [table name]_[table crc]_[partition].[index].pdb
+                String nonce = data.getName().substring(0, data.getName().indexOf('.'));
                 dataFiles.put(nonce, data);
             }
         }
         for (File ad: files) {
             if (ad.getName().endsWith(".ad")) {
-                String nonce = ad.getName().substring(0, ad.getName().length() - 3);
+                // Naming convention for ad file, [table name]_[table crc]_[partition].ad
+                String nonce = ad.getName().substring(0, ad.getName().indexOf('.'));
                 File dataFile = dataFiles.get(nonce);
                 if (dataFile != null) {
                     try {
-                        addDataSource(ad, partitions);
+                        addDataSource(ad, localPartitionsToSites, onDiskPartitions);
                     } catch (IOException e) {
                         VoltDB.crashLocalVoltDB("Error intializing export datasource " + ad, true, e);
                     }
@@ -143,82 +166,235 @@ public class ExportGeneration implements Generation {
                 }
             }
         }
-        createAndRegisterAckMailboxes(partitions, messenger);
+
+        // Count unique partitions only
+        Set<Integer> allLocalPartitions = localPartitionsToSites.stream()
+                .map(p -> p.getFirst())
+                .collect(Collectors.toSet());
+        Set<Integer> onDIskPartitionsSet = new HashSet<Integer>(onDiskPartitions);
+        onDIskPartitionsSet.removeAll(allLocalPartitions);
+        // One export mailbox per node, since we only keep one generation
+        if (!onDIskPartitionsSet.isEmpty()) {
+            createAckMailboxesIfNeeded(messenger, onDIskPartitionsSet);
+        }
     }
 
     void initializeGenerationFromCatalog(CatalogContext catalogContext,
             final CatalogMap<Connector> connectors,
             int hostId,
             HostMessenger messenger,
-            List<Integer> partitions)
+            List<Pair<Integer, Integer>> localPartitionsToSites)
     {
-        //Only populate partitions in use if export is actually happening
-        Set<Integer> partitionsInUse = new HashSet<Integer>();
-        final long genId = catalogContext.m_genId;
-        /*
-         * Now create datasources based on the catalog
-         */
+        // Now create datasources based on the catalog
+        boolean createdSources = false;
+        List<String> exportSignatures = new ArrayList<>();
         for (Connector conn : connectors) {
             if (conn.getEnabled()) {
                 for (ConnectorTableInfo ti : conn.getTableinfo()) {
                     Table table = ti.getTable();
-                    addDataSources(genId, table, hostId, partitions);
-                    partitionsInUse.addAll(partitions);
+                    addDataSources(table, hostId, localPartitionsToSites);
+                    exportSignatures.add(table.getSignature());
+                    createdSources = true;
                 }
             }
         }
 
-        createAndRegisterAckMailboxes(partitionsInUse, messenger);
+        updateDataSources(exportSignatures);
+        //Only populate partitions in use if export is actually happening
+        Set<Integer> partitionsInUse = createdSources ?
+                localPartitionsToSites.stream().map(p -> p.getFirst()).collect(Collectors.toSet()) : new HashSet<Integer>();
+        createAckMailboxesIfNeeded(messenger, partitionsInUse);
     }
 
-    private void createAndRegisterAckMailboxes(final Set<Integer> localPartitions, HostMessenger messenger) {
-
-        m_mailboxesZKPath = VoltZK.exportGenerations + "/" + "mailboxes";
-
-        m_mbox = new LocalMailbox(messenger) {
-            @Override
-            public void deliver(VoltMessage message) {
-                if (message instanceof BinaryPayloadMessage) {
-                    BinaryPayloadMessage bpm = (BinaryPayloadMessage)message;
-                    ByteBuffer buf = ByteBuffer.wrap(bpm.m_payload);
-                    final int partition = buf.getInt();
-                    final int length = buf.getInt();
-                    byte stringBytes[] = new byte[length];
-                    buf.get(stringBytes);
-                    String signature = new String(stringBytes, Constants.UTF8ENCODING);
-                    final long ackUSO = buf.getLong();
-                    final boolean runEveryWhere = (buf.getShort() == (short )1);
-
-                    final Map<String, ExportDataSource> partitionSources = m_dataSourcesByPartition.get(partition);
-                    if (partitionSources == null) {
-                        exportLog.error("Received an export ack for partition " + partition +
-                                " which does not exist on this node, partitions = " + m_dataSourcesByPartition);
-                        return;
+    // mark a DataSource as dropped if its connector is dropped.
+    private void updateDataSources( List<String> exportSignatures) {
+        synchronized(m_dataSourcesByPartition) {
+            for (Iterator<Map<String, ExportDataSource>> it = m_dataSourcesByPartition.values().iterator(); it.hasNext();) {
+                Map<String, ExportDataSource> sources = it.next();
+                for (String signature : sources.keySet()) {
+                    ExportDataSource src = sources.get(signature);
+                    if (!exportSignatures.contains(signature)) {
+                        src.setStatus(ExportDataSource.StreamStatus.DROPPED);
+                    } else if (src.getStatus() == ExportDataSource.StreamStatus.DROPPED) {
+                        src.setStatus(ExportDataSource.StreamStatus.ACTIVE);
                     }
-
-                    final ExportDataSource eds = partitionSources.get(signature);
-                    if (eds == null) {
-                        exportLog.warn("Received an export ack for partition " + partition +
-                                " source signature " + signature + " which does not exist on this node, sources = " + partitionSources);
-                        return;
-                    }
-
-                    try {
-                        if (exportLog.isDebugEnabled()) {
-                            exportLog.debug("Received an export ack for partition " + partition +
-                                    " source signature " + signature + " with uso: " + ackUSO);
-                        }
-                        eds.ack(ackUSO, runEveryWhere);
-                    } catch (RejectedExecutionException ignoreIt) {
-                        // ignore it: as it is already shutdown
-                    }
-                } else {
-                    exportLog.error("Receive unexpected message " + message + " in export subsystem");
                 }
             }
-        };
-        messenger.createMailbox(null, m_mbox);
+        }
+    }
 
+    /**
+     * Create export ack mailbox during generation initialization, do nothing if generation has already initialized.
+     * @param messenger  HostMessenger
+     * @param localPartitions  locally covered partitions
+     */
+    public void createAckMailboxesIfNeeded(HostMessenger messenger, final Set<Integer> localPartitions) {
+        m_mailboxesZKPath = VoltZK.exportGenerations + "/" + "mailboxes";
+        if (m_mbox == null) {
+            m_mbox = new LocalMailbox(messenger) {
+                @Override
+                public void deliver(VoltMessage message) {
+                    if (message instanceof BinaryPayloadMessage) {
+                        BinaryPayloadMessage bpm = (BinaryPayloadMessage)message;
+                        ByteBuffer buf = ByteBuffer.wrap(bpm.m_payload);
+                        final byte msgType = buf.get();
+                        final int partition = buf.getInt();
+                        final Map<String, ExportDataSource> partitionSources = m_dataSourcesByPartition.get(partition);
+
+                        final int length = buf.getInt();
+                        byte stringBytes[] = new byte[length];
+                        buf.get(stringBytes);
+                        String signature = new String(stringBytes, Constants.UTF8ENCODING);
+                        if (partitionSources == null) {
+                            exportLog.error("Received an export ack for partition " + partition +
+                                    " which does not exist on this node, partitions = " + m_dataSourcesByPartition);
+                            return;
+                        }
+                        final ExportDataSource eds = partitionSources.get(signature);
+                        if (eds == null) {
+                            // For dangling buffers
+                            if (msgType == ExportManager.TAKE_MASTERSHIP) {
+                                final long requestId = buf.getLong();
+                                if (exportLog.isDebugEnabled()) {
+                                    exportLog.debug("Received TAKE_MASTERSHIP message(" + requestId +
+                                            ") for a stream that no longer exists from " +
+                                            CoreUtils.hsIdToString(message.m_sourceHSId) +
+                                            " to " + CoreUtils.hsIdToString(m_mbox.getHSId()));
+                                }
+                                sendDummyTakeMastershipResponse(message.m_sourceHSId, requestId, partition, stringBytes);
+                            } else {
+                                exportLog.warn("Received export message " + msgType + " for partition " +
+                                        partition + " source signature " + signature +
+                                        " which does not exist on this node, sources = " + partitionSources);
+                            }
+                            return;
+                        }
+
+                        if (msgType == ExportManager.RELEASE_BUFFER) {
+                            final long seqNo = buf.getLong();
+                            try {
+                                if (exportLog.isDebugEnabled()) {
+                                    exportLog.debug("Received RELEASE_BUFFER message for " + eds.toString() +
+                                            " with sequence number: " + seqNo +
+                                            " from " + CoreUtils.hsIdToString(message.m_sourceHSId) +
+                                            " to " + CoreUtils.hsIdToString(m_mbox.getHSId()));
+                                }
+                                eds.ack(seqNo);
+                            } catch (RejectedExecutionException ignoreIt) {
+                                // ignore it: as it is already shutdown
+                            }
+                        } else if (msgType == ExportManager.GIVE_MASTERSHIP) {
+                            final long ackSeqNo = buf.getLong();
+                            try {
+                                if (exportLog.isDebugEnabled()) {
+                                    exportLog.debug("Received GIVE_MASTERSHIP message for " + eds.toString() +
+                                            " with sequence number:" + ackSeqNo +
+                                            " from " + CoreUtils.hsIdToString(message.m_sourceHSId) +
+                                            " to " + CoreUtils.hsIdToString(m_mbox.getHSId()));
+                                }
+                                eds.ack(ackSeqNo);
+                            } catch (RejectedExecutionException ignoreIt) {
+                                // ignore it: as it is already shutdown
+                            }
+                            eds.acceptMastership();
+                        } else if (msgType == ExportManager.GAP_QUERY) {
+                            final long requestId = buf.getLong();
+                            long gapStart = buf.getLong();
+                            if (exportLog.isDebugEnabled()) {
+                                exportLog.debug("Received GAP_QUERY message(" + requestId +
+                                        ") for " + eds.toString() +
+                                        " from " + CoreUtils.hsIdToString(message.m_sourceHSId) +
+                                        " to " + CoreUtils.hsIdToString(m_mbox.getHSId()));
+                            }
+                            eds.handleQueryMessage(message.m_sourceHSId, requestId, gapStart);
+                        } else if (msgType == ExportManager.QUERY_RESPONSE) {
+                            final long requestId = buf.getLong();
+                            final long lastSeq = buf.getLong();
+                            if (exportLog.isDebugEnabled()) {
+                                exportLog.debug("Received QUERY_RESPONSE message(" + requestId +
+                                        "," + lastSeq + ") for " + eds.toString() +
+                                        " from " + CoreUtils.hsIdToString(message.m_sourceHSId) +
+                                        " to " + CoreUtils.hsIdToString(m_mbox.getHSId()));
+                            }
+                            eds.handleQueryResponse(message.m_sourceHSId, requestId, lastSeq);
+                        } else if (msgType == ExportManager.TAKE_MASTERSHIP) {
+                            final long requestId = buf.getLong();
+                            if (exportLog.isDebugEnabled()) {
+                                exportLog.debug("Received TAKE_MASTERSHIP message(" + requestId +
+                                        ") for " + eds.toString() +
+                                        " from " + CoreUtils.hsIdToString(message.m_sourceHSId) +
+                                        " to " + CoreUtils.hsIdToString(m_mbox.getHSId()));
+                            }
+                            eds.handleTakeMastershipMessage(message.m_sourceHSId, requestId);
+                        } else if (msgType == ExportManager.TAKE_MASTERSHIP_RESPONSE) {
+                            final long requestId = buf.getLong();
+                            if (exportLog.isDebugEnabled()) {
+                                exportLog.debug("Received TAKE_MASTERSHIP_RESPONSE message(" + requestId +
+                                        ") for " + eds.toString() +
+                                        " from " + CoreUtils.hsIdToString(message.m_sourceHSId) +
+                                        " to " + CoreUtils.hsIdToString(m_mbox.getHSId()));
+                            }
+                            eds.handleTakeMastershipResponse(message.m_sourceHSId, requestId);
+                        } else {
+                            exportLog.error("Receive unsupported message type " + message + " in export subsystem");
+                        }
+                    } else {
+                        exportLog.error("Receive unexpected message " + message + " in export subsystem");
+                    }
+                }
+            };
+            messenger.createMailbox(null, m_mbox);
+        }
+
+        // Rejoining node may receives gap query message before childUpdating thread gets back result,
+        // in case it couldn't find local mailbox to send back response, add local mailbox to the list first.
+        for (Integer partition : localPartitions) {
+            updateAckMailboxes(partition, null);
+        }
+        // Update latest replica list to each data source.
+        updateReplicaList(messenger, localPartitions);
+    }
+
+    // Auto reply a response when the requested stream is no longer exists
+    private void sendDummyTakeMastershipResponse(long sourceHsid, long requestId, int partitionId, byte[] signatureBytes) {
+        // msg type(1) + partition:int(4) + length:int(4) + signaturesBytes.length
+        // requestId(8)
+        int msgLen = 1 + 4 + 4 + signatureBytes.length + 8;
+        ByteBuffer buf = ByteBuffer.allocate(msgLen);
+        buf.put(ExportManager.TAKE_MASTERSHIP_RESPONSE);
+        buf.putInt(partitionId);
+        buf.putInt(signatureBytes.length);
+        buf.put(signatureBytes);
+        buf.putLong(requestId);
+        BinaryPayloadMessage bpm = new BinaryPayloadMessage(new byte[0], buf.array());
+        m_mbox.send(sourceHsid, bpm);
+        if (exportLog.isDebugEnabled()) {
+            exportLog.debug("Partition " + partitionId + " mailbox hsid (" +
+                    CoreUtils.hsIdToString(m_mbox.getHSId()) +
+                    ") send dummy TAKE_MASTERSHIP_RESPONSE message(" +
+                    requestId + ") to " + CoreUtils.hsIdToString(sourceHsid));
+        }
+    }
+
+    // Access by multiple threads
+    public void updateAckMailboxes(int partition, Set<Long> newHSIds) {
+        synchronized (m_dataSourcesByPartition) {
+            ImmutableList<Long> replicaHSIds = m_replicasHSIds.get(partition);
+            for( ExportDataSource eds: m_dataSourcesByPartition.get(partition).values()) {
+                eds.updateAckMailboxes(Pair.of(m_mbox, replicaHSIds));
+                if (newHSIds != null && !newHSIds.isEmpty()) {
+                    // In case of newly joined or rejoined streams miss any RELEASE_BUFFER event,
+                    // master stream resends the event when the export mailbox is aware of new streams.
+                    eds.forwardAckToNewJoinedReplicas(newHSIds);
+                    // After rejoin, new data source may contain the data which current master doesn't have,
+                    //  only on master stream if it is blocked by the gap
+                    eds.queryForBestCandidate();
+                }
+            }
+        }
+    }
+
+    private void updateReplicaList(HostMessenger messenger, Set<Integer> localPartitions) {
         //If we have new partitions create mailbox paths.
         for (Integer partition : localPartitions) {
             final String partitionDN =  m_mailboxesZKPath + "/" + partition;
@@ -254,9 +430,9 @@ public class ExportGeneration implements Generation {
                     try {
                         children = p.getSecond().getChildren();
                     } catch (InterruptedException e) {
-                        Throwables.propagate(e);
+                        throw new RuntimeException(e);
                     } catch (KeeperException e) {
-                        Throwables.propagate(e);
+                        throw new RuntimeException(e);
                     }
                     ImmutableList.Builder<Long> mailboxes = ImmutableList.builder();
 
@@ -265,12 +441,8 @@ public class ExportGeneration implements Generation {
                         mailboxes.add(Long.valueOf(child));
                     }
                     ImmutableList<Long> mailboxHsids = mailboxes.build();
-                    synchronized (m_dataSourcesByPartition) {
-                        for( ExportDataSource eds:
-                            m_dataSourcesByPartition.get( partition).values()) {
-                            eds.updateAckMailboxes(Pair.of(m_mbox, mailboxHsids));
-                        }
-                    }
+                    m_replicasHSIds.put(partition, mailboxHsids);
+                    updateAckMailboxes(partition, null);
                 }
             }
         });
@@ -278,9 +450,8 @@ public class ExportGeneration implements Generation {
         try {
             fut.get();
         } catch (Throwable t) {
-            Throwables.propagate(t);
+            throw new RuntimeException(t);
         }
-
     }
 
     private Watcher constructMailboxChildWatcher(final HostMessenger messenger) {
@@ -334,7 +505,6 @@ public class ExportGeneration implements Generation {
                             } else if (code != KeeperException.Code.OK) {
                                 throw KeeperException.create(code);
                             }
-
                             final String split[] = path.split("/");
                             final int partition = Integer.valueOf(split[split.length - 1]);
                             ImmutableList.Builder<Long> mailboxes = ImmutableList.builder();
@@ -343,11 +513,16 @@ public class ExportGeneration implements Generation {
                                 mailboxes.add(Long.valueOf(child));
                             }
                             ImmutableList<Long> mailboxHsids = mailboxes.build();
-                            synchronized (m_dataSourcesByPartition) {
-                                for( ExportDataSource eds: m_dataSourcesByPartition.get( partition).values()) {
-                                    eds.updateAckMailboxes(Pair.of(m_mbox, mailboxHsids));
-                                }
+                            Set<Long> newHSIds = Sets.difference(new HashSet<Long>(mailboxHsids),
+                                    new HashSet<Long>(m_replicasHSIds.get(partition)));
+                            if (exportLog.isDebugEnabled()) {
+                                Set<Long> removedHSIds = Sets.difference(new HashSet<Long>(m_replicasHSIds.get(partition)),
+                                        new HashSet<Long>(mailboxHsids));
+                                exportLog.debug("Current export generation added mailbox: " + CoreUtils.hsIdCollectionToString(newHSIds) +
+                                        ", removed mailbox: " + CoreUtils.hsIdCollectionToString(removedHSIds));
                             }
+                            m_replicasHSIds.put(partition, mailboxHsids);
+                            updateAckMailboxes(partition, newHSIds);
                         } catch (Throwable t) {
                             VoltDB.crashLocalVoltDB("Error in export ack handling", true, t);
                         }
@@ -359,26 +534,29 @@ public class ExportGeneration implements Generation {
     }
 
     @Override
-    public long getQueuedExportBytes(int partitionId, String signature) {
-        Map<String, ExportDataSource> sources = m_dataSourcesByPartition.get(partitionId);
-
-        if (sources == null) {
-            /*
-             * This is fine. If the table is dropped it won't have an entry in the generation created
-             * after the table was dropped.
-             */
-            return 0;
+    public List<ExportStatsRow> getStats(boolean interval) {
+        List<ListenableFuture<ExportStatsRow>> tasks = new ArrayList<ListenableFuture<ExportStatsRow>>();
+        Map<Integer, Map<String, ExportDataSource>> dataSourcesByPartition
+            = new HashMap<Integer, Map<String, ExportDataSource>>();
+        synchronized(m_dataSourcesByPartition) {
+            dataSourcesByPartition.putAll(m_dataSourcesByPartition);
+        }
+        for (Map<String, ExportDataSource> dataSources : dataSourcesByPartition.values()) {
+            for (ExportDataSource source : dataSources.values()) {
+                ListenableFuture<ExportStatsRow> syncFuture = source.getImmutableStatsRow(interval);
+                if (syncFuture != null)
+                    tasks.add(syncFuture);
+            }
         }
 
-        ExportDataSource source = sources.get(signature);
-        if (source == null) {
-            /*
-             * This is fine. If the table is dropped it won't have an entry in the generation created
-             * after the table was dropped.
-             */
-            return 0;
+        try {
+            if (!tasks.isEmpty()) {
+                return Futures.allAsList(tasks).get();
+            }
+        } catch (Exception e) {
+            exportLog.error("Unexpected exception syncing export data during snapshot save.", e);
         }
-        return source.sizeInBytes();
+        return new ArrayList<>();
     }
 
     @Override
@@ -413,13 +591,12 @@ public class ExportGeneration implements Generation {
     /*
      * Create a datasource based on an ad file
      */
-    private void addDataSource(File adFile, Set<Integer> partitions) throws IOException {
-        ExportDataSource source = new ExportDataSource(this, adFile);
-        partitions.add(source.getPartitionId());
+    private void addDataSource(File adFile, List<Pair<Integer, Integer>> localPartitionsToSites,
+            List<Integer> adFilePartitions) throws IOException {
+        ExportDataSource source = new ExportDataSource(this, adFile, localPartitionsToSites);
+        adFilePartitions.add(source.getPartitionId());
         if (exportLog.isDebugEnabled()) {
-            exportLog.debug("Creating ExportDataSource for " + adFile + " table " + source.getTableName() +
-                    " signature " + source.getSignature() + " partition id " + source.getPartitionId() +
-                    " bytes " + source.sizeInBytes());
+            exportLog.debug("Creating " + source.toString() + " for " + adFile + " bytes " + source.sizeInBytes());
         }
         Map<String, ExportDataSource> dataSourcesForPartition = m_dataSourcesByPartition.get(source.getPartitionId());
         if (dataSourcesForPartition == null) {
@@ -435,14 +612,16 @@ public class ExportGeneration implements Generation {
     }
 
     // silly helper to add datasources for a table catalog object
-    private void addDataSources(final long genId, Table table, int hostId, List<Integer> partitions)
+    private void addDataSources(Table table, int hostId, List<Pair<Integer, Integer>> localPartitionsToSites)
     {
-        for (Integer partition : partitions) {
+        for (Pair<Integer, Integer> partitionAndSiteId : localPartitionsToSites) {
 
             /*
              * IOException can occur if there is a problem
              * with the persistent aspects of the datasource storage
              */
+            int partition = partitionAndSiteId.getFirst();
+            int siteId = partitionAndSiteId.getSecond();
             try {
                 Map<String, ExportDataSource> dataSourcesForPartition = m_dataSourcesByPartition.get(partition);
                 if (dataSourcesForPartition == null) {
@@ -455,14 +634,16 @@ public class ExportGeneration implements Generation {
                             "database",
                             table.getTypeName(),
                             partition,
+                            siteId,
                             key,
                             table.getColumns(),
                             table.getPartitioncolumn(),
                             m_directory.getPath());
                     if (exportLog.isDebugEnabled()) {
                         exportLog.debug("Creating ExportDataSource for table in catalog " + table.getTypeName() +
-                                " signature " + key + " partition id " + partition);
+                                " signature " + key + " partition " + partition + " site " + siteId);
                     }
+
                     dataSourcesForPartition.put(key, exportDataSource);
                 } else {
                     //Since we are loading from catalog any found EDS mark it to be in catalog.
@@ -477,7 +658,8 @@ public class ExportGeneration implements Generation {
     }
 
     @Override
-    public void pushExportBuffer(int partitionId, String signature, long uso, ByteBuffer buffer, boolean sync) {
+    public void pushExportBuffer(int partitionId, String signature,
+            long startSequenceNumber, int tupleCount, long uniqueId, ByteBuffer buffer, boolean sync) {
         Map<String, ExportDataSource> sources = m_dataSourcesByPartition.get(partitionId);
 
         if (sources == null) {
@@ -499,7 +681,7 @@ public class ExportGeneration implements Generation {
             return;
         }
 
-        source.pushExportBuffer(uso, buffer, sync);
+        source.pushExportBuffer(startSequenceNumber, tupleCount, uniqueId, buffer, sync);
     }
 
     @Override
@@ -544,40 +726,25 @@ public class ExportGeneration implements Generation {
     }
 
     @Override
-    public void truncateExportToTxnId(long txnId, long[] perPartitionTxnIds) {
-        // create an easy partitionId:txnId lookup.
-        HashMap<Integer, Long> partitionToTxnId = new HashMap<Integer, Long>();
-        for (long tid : perPartitionTxnIds) {
-            partitionToTxnId.put(TxnEgo.getPartitionId(tid), tid);
-        }
-
-        List<ListenableFuture<?>> tasks = new ArrayList<ListenableFuture<?>>();
-
+    public void updateInitialExportStateToSeqNo(int partitionId, String signature,
+                                                boolean isRecover, long sequenceNumber) {
         // pre-iv2, the truncation point is the snapshot transaction id.
         // In iv2, truncation at the per-partition txn id recorded in the snapshot.
-        for (Map<String, ExportDataSource> dataSources : m_dataSourcesByPartition.values()) {
-            for (ExportDataSource source : dataSources.values()) {
-                Long truncationPoint = partitionToTxnId.get(source.getPartitionId());
-                if (truncationPoint == null) {
-                    exportLog.error("Snapshot " + txnId +
-                            " does not include truncation point for partition " +
-                            source.getPartitionId());
-                }
-                else {
-                    //If this was drained and closed we may not have truncation point and we dont want to reopen PBDs
-                    if (!source.isClosed()) {
-                        tasks.add(source.truncateExportToTxnId(truncationPoint));
-                    }
+
+        Map<String, ExportDataSource> dataSource = m_dataSourcesByPartition.get(partitionId);
+        // It is possible that for restore the partitions have changed, in which case what we are doing is silly
+        if (dataSource != null) {
+            ExportDataSource source = dataSource.get(signature);
+            if (source != null) {
+                ListenableFuture<?> task = source.truncateExportToSeqNo(isRecover, sequenceNumber);
+                try {
+                    task.get();
+                } catch (Exception e) {
+                    VoltDB.crashLocalVoltDB("Unexpected exception truncating export data during snapshot restore. " +
+                                            "You can back up export overflow data and start the " +
+                                            "DB without it to get past this error", true, e);
                 }
             }
-        }
-
-        try {
-            Futures.allAsList(tasks).get();
-        } catch (Exception e) {
-            VoltDB.crashLocalVoltDB("Unexpected exception truncating export data during snapshot restore. " +
-                                    "You can back up export overflow data and start the " +
-                                    "DB without it to get past this error", true, e);
         }
     }
 
@@ -625,15 +792,32 @@ public class ExportGeneration implements Generation {
                 source.unacceptMastership();
             }
         }
-
     }
+
     /**
-     * Indicate to all associated {@link ExportDataSource}to assume
+     * Indicate to all associated {@link ExportDataSource}to PREPARE give up
+     * mastership role for the given partition id
+     * @param partitionId
+     */
+    public void prepareTransferMastership(int partitionId, int hostId) {
+        Map<String, ExportDataSource> partitionDataSourceMap = m_dataSourcesByPartition.get(partitionId);
+
+        // this case happens when there are no export tables
+        if (partitionDataSourceMap == null) {
+            return;
+        }
+        for (ExportDataSource eds : partitionDataSourceMap.values()) {
+            eds.prepareTransferMastership(hostId);
+        }
+    }
+
+    /**
+     * Indicate to all associated {@link ExportDataSource} to assume
      * mastership role for the given partition id
      * @param partitionId
      */
     @Override
-    public void acceptMastershipTask( int partitionId) {
+    public void acceptMastership(int partitionId) {
         Map<String, ExportDataSource> partitionDataSourceMap = m_dataSourcesByPartition.get(partitionId);
 
         // this case happens when there are no export tables
@@ -646,6 +830,60 @@ public class ExportGeneration implements Generation {
                 eds.acceptMastership();
             } catch (Exception e) {
                 exportLog.error("Unable to start exporting", e);
+            }
+        }
+    }
+
+    /**
+     * Indicate to all associated {@link ExportDataSource} to QUERY
+     * mastership role for the given partition id
+     * @param partitionId
+     */
+    void takeMastership(int partitionId) {
+        Map<String, ExportDataSource> partitionDataSourceMap = m_dataSourcesByPartition.get(partitionId);
+
+        // this case happens when there are no export tables
+        if (partitionDataSourceMap == null) {
+            return;
+        }
+
+        for( ExportDataSource eds: partitionDataSourceMap.values()) {
+            eds.takeMastership();
+        }
+    }
+
+    @Override
+    public Map<Integer, Map<String, ExportDataSource>> getDataSourceByPartition() {
+        return m_dataSourcesByPartition;
+    }
+
+    public void processStreamControl(String exportSource, List<String> exportTargets, OperationMode operation, VoltTable results) {
+        exportLog.info("Export " + operation + " source:" + exportSource + " targets:" + exportTargets);
+        synchronized (m_dataSourcesByPartition) {
+            RealVoltDB volt = (RealVoltDB) VoltDB.instance();
+            for (Iterator<Integer> partitionIt = m_dataSourcesByPartition.keySet().iterator(); partitionIt.hasNext();) {
+                // apply to partition leaders only
+                Integer partition = partitionIt.next();
+                boolean isLeader = ((SpInitiator)volt.getInitiator(partition)).isLeader();
+                if (!isLeader) {
+                    continue;
+                }
+                Map<String, ExportDataSource> sources = m_dataSourcesByPartition.get(partition);
+                for (Iterator<ExportDataSource> it = sources.values().iterator(); it.hasNext();) {
+                    ExportDataSource eds = it.next();
+                    if (!StringUtil.isEmpty(exportSource) && !eds.getTableName().equalsIgnoreCase(exportSource)) {
+                        continue;
+                    }
+
+                    // no target match
+                    if (!exportTargets.isEmpty() && !exportTargets.contains(eds.getTarget())) {
+                        continue;
+                    }
+
+                    if (eds.processStreamControl(operation)) {
+                        results.addRow(eds.getTableName(), eds.getTarget(), partition, "SUCCESS", "");
+                    }
+                }
             }
         }
     }

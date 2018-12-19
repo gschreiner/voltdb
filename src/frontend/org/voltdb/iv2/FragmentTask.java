@@ -124,12 +124,8 @@ public class FragmentTask extends FragmentTaskBase
                                                        "partition", Integer.toString(siteConnection.getCorrespondingPartitionId())));
         }
 
-        // if this has a procedure name from the initiation bundled,
-        // inform the site connection here
-        String procName = m_fragmentMsg.getProcedureName();
-        if (procName != null) {
-            siteConnection.setProcedureName(procName);
-        }
+        // Setup this procedure with the site connection
+        siteConnection.setupProcedure(m_fragmentMsg.getProcedureName());
 
         // Set the begin undo token if we haven't already
         // In the future we could record a token per batch
@@ -158,6 +154,7 @@ public class FragmentTask extends FragmentTaskBase
             if (BatchTimeoutOverrideType.isUserSetTimeout(individualTimeout)) {
                 siteConnection.setBatchTimeout(originalTimeout);
             }
+            siteConnection.completeProcedure();
         }
 
         completeFragment();
@@ -234,7 +231,6 @@ public class FragmentTask extends FragmentTaskBase
     {
         // Check and see if we can flush early
         // right now, this is just read-only and final task
-        // This
         if (m_fragmentMsg.isFinalTask() && m_txnState.isReadOnly())
         {
             doCommonSPICompleteActions();
@@ -281,6 +277,7 @@ public class FragmentTask extends FragmentTaskBase
             }
         }
 
+        int drBufferChanged = 0;
         for (int frag = 0; frag < m_fragmentMsg.getFragmentCount(); frag++)
         {
             byte[] planHash = m_fragmentMsg.getPlanHash(frag);
@@ -346,6 +343,8 @@ public class FragmentTask extends FragmentTaskBase
                 final int tableSize;
                 final byte fullBacking[];
                 try {
+                    // read the size of the DR buffer used
+                    drBufferChanged = fragResult.readInt();
                     // read the complete size of the buffer used
                     fragResult.readInt();
                     // read number of dependencies (1)
@@ -435,6 +434,8 @@ public class FragmentTask extends FragmentTaskBase
                 }
             }
         }
+        // for multi fragments task, using the aggregated dr Buffer size
+        currentFragResponse.setDrBufferSize(drBufferChanged);
         return currentFragResponse;
     }
 
@@ -451,6 +452,7 @@ public class FragmentTask extends FragmentTaskBase
         return sb.toString();
     }
 
+    @Override
     public boolean needCoordination() {
         return !(m_txnState.isReadOnly() || isBorrowedTask() || m_isNPartition);
     }

@@ -115,6 +115,8 @@ public class LocalCluster extends VoltServerConfig {
     private boolean m_expectedToCrash = false;
     private boolean m_expectedToInitialize = true;
     int m_replicationPort = -1;
+    private String m_drPublicHost;
+    private int m_drPublicPort = -1;
 
     // log message pattern match results by host
     private Map<Integer, Set<String>> m_logMessageMatchResults = new ConcurrentHashMap<>();
@@ -151,7 +153,7 @@ public class LocalCluster extends VoltServerConfig {
     //wait before next node is started up in millisecond
     //to help matching the host id on the real cluster with the host id on the local
     //cluster
-    private long m_deplayBetweenNodeStartupMS = 0;
+    private long m_delayBetweenNodeStartupMS = 0;
     private boolean m_httpPortEnabled = false;
     private final ArrayList<EEProcess> m_eeProcs = new ArrayList<>();
     //This is additional process invironment variables that can be passed.
@@ -334,8 +336,8 @@ public class LocalCluster extends VoltServerConfig {
         m_usesStagedSchema = schemaToStage != null || classesJarToStage != null;
         setNewCli(isNewCli() || m_usesStagedSchema);
 
-        assert siteCount > 0 : "site count is less than 0";
-        assert hostCount > 0 : "host count is less than 0";
+        assert siteCount > 0 : "site count is less than 1";
+        assert hostCount > 0 : "host count is less than 1";
 
         numberOfCoordinators = hostCount <= 2 ? hostCount : hostCount <= 4 ? 2 : 3;
         internalPortGenerator = new InternalPortGeneratorForTest(portGenerator, numberOfCoordinators);
@@ -410,7 +412,7 @@ public class LocalCluster extends VoltServerConfig {
 
         // if the user wants valgrind and it makes sense, give it to 'em
         // For now only one host works.
-        if (isMemcheckDefined() && (target == BackendTarget.NATIVE_EE_JNI) && m_hostCount == 1) {
+        if (isMemcheckDefined() && target.isValgrindable && m_hostCount == 1) {
             m_target = BackendTarget.NATIVE_EE_VALGRIND_IPC;
         }
         else {
@@ -504,7 +506,7 @@ public class LocalCluster extends VoltServerConfig {
      * Called after a constructor but before startup.
      */
     public void overrideAnyRequestForValgrind() {
-        if (templateCmdLine.m_backend == BackendTarget.NATIVE_EE_VALGRIND_IPC) {
+        if (templateCmdLine.m_backend.isValgrindTarget) {
             m_target = BackendTarget.NATIVE_EE_JNI;
             templateCmdLine.m_backend = BackendTarget.NATIVE_EE_JNI;
         }
@@ -619,6 +621,14 @@ public class LocalCluster extends VoltServerConfig {
         m_replicationPort = port;
     }
 
+    public void setDrPublicHost(String host) {
+        m_drPublicHost = host;
+    }
+
+    public void setDrPublicPort(int port) {
+        m_drPublicPort = port;
+    }
+
     private void startLocalServer(int hostId, boolean clearLocalDataDirectories) throws IOException {
         startLocalServer(hostId, clearLocalDataDirectories, templateCmdLine.m_startAction);
     }
@@ -668,6 +678,7 @@ public class LocalCluster extends VoltServerConfig {
         cmdln.httpPort(portGenerator.nextHttp());
         // replication port and its two automatic followers.
         cmdln.drAgentStartPort(m_replicationPort != -1 ? m_replicationPort : portGenerator.nextReplicationPort());
+        setDrPublicInterface(cmdln);
         portGenerator.nextReplicationPort();
         portGenerator.nextReplicationPort();
         if (m_target == BackendTarget.NATIVE_EE_VALGRIND_IPC) {
@@ -921,9 +932,9 @@ public class LocalCluster extends VoltServerConfig {
 
                 startOne(i, clearLocalDataDirectories, StartAction.CREATE, true, placementGroup);
                 //wait before next one
-                if (m_deplayBetweenNodeStartupMS > 0) {
+                if (m_delayBetweenNodeStartupMS > 0) {
                     try {
-                        Thread.sleep(m_deplayBetweenNodeStartupMS);
+                        Thread.sleep(m_delayBetweenNodeStartupMS);
                     } catch (InterruptedException e) {
                     }
                 }
@@ -1174,6 +1185,8 @@ public class LocalCluster extends VoltServerConfig {
                 portGenerator.next();
             }
 
+            setDrPublicInterface(cmdln);
+
             // add the ipc ports
             if (m_target == BackendTarget.NATIVE_EE_IPC) {
                 // set 1 port for the EE process
@@ -1338,6 +1351,15 @@ public class LocalCluster extends VoltServerConfig {
         }
     }
 
+    private void setDrPublicInterface(CommandLine cmdln) {
+        if (m_drPublicHost != null) {
+            cmdln.m_drPublicHost = m_drPublicHost;
+        }
+        if (m_drPublicPort != -1) {
+            cmdln.m_drPublicPort = m_drPublicPort;
+        }
+    }
+
     public void setNumberOfCoordinators(int i) {
         checkArgument(i > 0 && i <= m_hostCount,
                 "coordinators count %s must be greater than 0, and less or equal to host count %s",
@@ -1395,11 +1417,15 @@ public class LocalCluster extends VoltServerConfig {
 
     //create a new node and join to the cluster via rejoin
     public void rejoinOne(int hostId) {
+        rejoinOne(hostId, true);
+    }
+
+    public void rejoinOne(int hostId, boolean clearLocalDataDirectories) {
         try {
             if (isNewCli && !m_hostRoots.containsKey(Integer.toString(hostId))) {
                 initLocalServer(hostId, true);
             }
-            startOne(hostId, true, StartAction.REJOIN, true, null);
+            startOne(hostId, clearLocalDataDirectories, StartAction.REJOIN, true, null);
         }
         catch (IOException ioe) {
             throw new RuntimeException(ioe);
@@ -1436,9 +1462,9 @@ public class LocalCluster extends VoltServerConfig {
                     initLocalServer(entry.getKey(), true);
                 }
                 startOne(entry.getKey(), true, StartAction.JOIN, false, entry.getValue());
-                if (m_deplayBetweenNodeStartupMS > 0) {
+                if (m_delayBetweenNodeStartupMS > 0) {
                     try {
-                        Thread.sleep(m_deplayBetweenNodeStartupMS);
+                        Thread.sleep(m_delayBetweenNodeStartupMS);
                     } catch (InterruptedException e) {
                     }
                 }
@@ -2253,20 +2279,37 @@ public class LocalCluster extends VoltServerConfig {
         }
     }
 
+    public static LocalCluster createOnly(String schemaDDL, int siteCount, int hostCount, int kfactor, int clusterId,
+                                          int replicationPort, int remoteReplicationPort, String pathToVoltDBRoot, String jar,
+                                          DrRoleType drRole, boolean hasLocalServer) throws IOException {
+        VoltProjectBuilder builder = new VoltProjectBuilder();
+        LocalCluster lc = compileBuilder(schemaDDL, siteCount, hostCount, kfactor, clusterId,
+                replicationPort, remoteReplicationPort, pathToVoltDBRoot, jar, drRole, builder, null);
+        lc.setHasLocalServer(hasLocalServer);
+        lc.overrideAnyRequestForValgrind();
+        lc.setJavaProperty("DR_QUERY_INTERVAL", "5");
+        lc.setJavaProperty("DR_RECV_TIMEOUT", "5000");
+        if (!lc.isNewCli()) {
+            lc.setDeploymentAndVoltDBRoot(builder.getPathToDeployment(), pathToVoltDBRoot);
+        }
+
+        return lc;
+    }
+
+    public void startCluster() {
+        if (!isNewCli()) {
+            startUp(false);
+        } else {
+            startUp(true);
+        }
+    }
+
     // Use this for optionally enabling localServer in one of the DR clusters (usually for debugging)
     public static LocalCluster createLocalCluster(String schemaDDL, int siteCount, int hostCount, int kfactor, int clusterId,
                                                   int replicationPort, int remoteReplicationPort, String pathToVoltDBRoot, String jar,
-                                                  boolean isReplica) throws IOException {
-        return createLocalCluster(schemaDDL, siteCount, hostCount, kfactor, clusterId, replicationPort, remoteReplicationPort,
-                pathToVoltDBRoot, jar, isReplica ? DrRoleType.REPLICA : DrRoleType.MASTER, false);
-    }
-
-    public static LocalCluster createLocalCluster(String schemaDDL, int siteCount, int hostCount, int kfactor, int clusterId,
-                                                  int replicationPort, int remoteReplicationPort, String pathToVoltDBRoot, String jar,
                                                   DrRoleType drRole, boolean hasLocalServer) throws IOException {
-        VoltProjectBuilder builder = new VoltProjectBuilder();
         return createLocalCluster(schemaDDL, siteCount, hostCount, kfactor, clusterId, replicationPort, remoteReplicationPort,
-                pathToVoltDBRoot, jar, drRole, hasLocalServer, builder);
+                pathToVoltDBRoot, jar, drRole, hasLocalServer, null, null);
     }
 
     public static LocalCluster createLocalCluster(String schemaDDL, int siteCount, int hostCount, int kfactor, int clusterId,
@@ -2278,16 +2321,19 @@ public class LocalCluster extends VoltServerConfig {
 
     public static LocalCluster createLocalCluster(String schemaDDL, int siteCount, int hostCount, int kfactor, int clusterId,
                                                   int replicationPort, int remoteReplicationPort, String pathToVoltDBRoot, String jar,
-                                                  DrRoleType drRole, boolean hasLocalServer, String callingMethodName) throws IOException {
-        VoltProjectBuilder builder = new VoltProjectBuilder();
+                                                  DrRoleType drRole, boolean hasLocalServer, VoltProjectBuilder builder,
+                                                  String callingMethodName) throws IOException {
         return createLocalCluster(schemaDDL, siteCount, hostCount, kfactor, clusterId, replicationPort, remoteReplicationPort,
-                pathToVoltDBRoot, jar, drRole, hasLocalServer, builder, callingMethodName);
+                           pathToVoltDBRoot, jar, drRole, hasLocalServer, builder, callingMethodName, false, null);
     }
 
     public static LocalCluster createLocalCluster(String schemaDDL, int siteCount, int hostCount, int kfactor, int clusterId,
                                                   int replicationPort, int remoteReplicationPort, String pathToVoltDBRoot, String jar,
                                                   DrRoleType drRole, boolean hasLocalServer, VoltProjectBuilder builder,
-                                                  String callingMethodName) throws IOException {
+                                                  String callingMethodName,
+                                                  boolean enableSPIMigration,
+                                                  Map<String, String> javaProps) throws IOException {
+        if (builder == null) builder = new VoltProjectBuilder();
         LocalCluster lc = compileBuilder(schemaDDL, siteCount, hostCount, kfactor, clusterId,
                 replicationPort, remoteReplicationPort, pathToVoltDBRoot, jar, drRole, builder, callingMethodName);
 
@@ -2296,6 +2342,14 @@ public class LocalCluster extends VoltServerConfig {
         lc.overrideAnyRequestForValgrind();
         lc.setJavaProperty("DR_QUERY_INTERVAL", "5");
         lc.setJavaProperty("DR_RECV_TIMEOUT", "5000");
+        // temporary, until we always enable SPI migration
+        if (enableSPIMigration) {
+            lc.setJavaProperty("DISABLE_MIGRATE_PARTITION_LEADER", "false");
+        }
+        if (javaProps != null)
+        for (Map.Entry<String, String> prop : javaProps.entrySet()) {
+            lc.setJavaProperty(prop.getKey(), prop.getValue());
+        }
         if (!lc.isNewCli()) {
             lc.setDeploymentAndVoltDBRoot(builder.getPathToDeployment(), pathToVoltDBRoot);
             lc.startUp(false);
@@ -2356,8 +2410,8 @@ public class LocalCluster extends VoltServerConfig {
         return client;
     }
 
-    public void setDeplayBetweenNodeStartup(long deplayBetweenNodeStartup) {
-        m_deplayBetweenNodeStartupMS = deplayBetweenNodeStartup;
+    public void setDelayBetweenNodeStartup(long delayBetweenNodeStartup) {
+        m_delayBetweenNodeStartupMS = delayBetweenNodeStartup;
     }
 
     // Reset the message match result

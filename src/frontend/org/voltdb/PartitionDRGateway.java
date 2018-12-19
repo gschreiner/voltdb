@@ -25,6 +25,7 @@ import java.util.concurrent.ExecutionException;
 import org.voltcore.utils.DBBPool;
 import org.voltcore.utils.DBBPool.BBContainer;
 import org.voltdb.iv2.SpScheduler.DurableUniqueIdListener;
+import org.voltdb.iv2.TransactionCommitInterest;
 import org.voltdb.jni.ExecutionEngine.EventType;
 
 import com.google_voltpatches.common.collect.ImmutableMap;
@@ -35,7 +36,7 @@ import org.voltdb.utils.MiscUtils;
  * DR is enabled. If no DR, then it acts as a noop stub.
  *
  */
-public class PartitionDRGateway implements DurableUniqueIdListener {
+public class PartitionDRGateway implements DurableUniqueIdListener, TransactionCommitInterest {
 
     public enum DRRecordType {
         INSERT, DELETE, UPDATE, BEGIN_TXN, END_TXN, TRUNCATE_TABLE, DELETE_BY_INDEX, UPDATE_BY_INDEX, HASH_DELIMITER;
@@ -49,11 +50,6 @@ public class PartitionDRGateway implements DurableUniqueIdListener {
         MULTI,
         SPECIAL
     }
-
-    // Keep sync with EE REPLICATED_TABLE_MASK at types.h
-    // This mask uses -128 which corresponds to 0x80
-    // The first bit is set with this mask to indicate that subsequent records are for replicated tables
-    public static final byte REPLICATED_TABLE_MASK = Byte.MIN_VALUE;
 
     public static enum DRRowType {
         EXISTING_ROW,
@@ -135,17 +131,41 @@ public class PartitionDRGateway implements DurableUniqueIdListener {
         return pdrg;
     }
 
-    private static PartitionDRGateway tryToLoadProVersion()
+    private static Class<?> getPDRGImpl()
     {
         try {
             Class<?> pdrgiClass = null;
             pdrgiClass = Class.forName("org.voltdb.dr2.PartitionDRGatewayImpl");
+            return pdrgiClass;
+        } catch (Exception e) {
+        }
+        return null;
+    }
+
+    private static PartitionDRGateway tryToLoadProVersion()
+    {
+        try {
+            Class<?> pdrgiClass = getPDRGImpl();
             Constructor<?> constructor = pdrgiClass.getConstructor();
             Object obj = constructor.newInstance();
             return (PartitionDRGateway) obj;
         } catch (Exception e) {
         }
         return null;
+    }
+
+    public static int getMessageTypeLength(DRRecordType type) {
+        try {
+            Class<?> pdrgiClass = getPDRGImpl();
+            if (type == DRRecordType.BEGIN_TXN) {
+                return pdrgiClass.getField("BEGINTXN_OFFSET").getInt(null);
+            }
+            else if (type == DRRecordType.END_TXN) {
+                return pdrgiClass.getField("ENDTXN_OFFSET").getInt(null);
+            }
+        } catch (Exception e) {
+        }
+        return 0;
     }
 
     // empty methods for community edition
@@ -155,8 +175,8 @@ public class PartitionDRGateway implements DurableUniqueIdListener {
     {}
     public void onSuccessfulProcedureCall(StoredProcedureInvocation spi) {}
     public void onSuccessfulMPCall(StoredProcedureInvocation spi) {}
-    public long onBinaryDR(int partitionId, long startSequenceNumber, long lastSequenceNumber,
-            long lastSpUniqueId, long lastMpUniqueId, EventType eventType, ByteBuffer buf) {
+    public long onBinaryDR(long lastCommittedSpHandle, int partitionId, long startSequenceNumber, long lastSequenceNumber,
+                           long lastSpUniqueId, long lastMpUniqueId, EventType eventType, ByteBuffer buf) {
         final BBContainer cont = DBBPool.wrapBB(buf);
         DBBPool.registerUnsafeMemory(cont.address());
         cont.discard();
@@ -175,6 +195,7 @@ public class PartitionDRGateway implements DurableUniqueIdListener {
 
     public static long pushDRBuffer(
             int partitionId,
+            long lastCommittedSpHandle,
             long startSequenceNumber,
             long lastSequenceNumber,
             long lastSpUniqueId,
@@ -185,7 +206,7 @@ public class PartitionDRGateway implements DurableUniqueIdListener {
         if (pdrg == null) {
             return -1;
         }
-        return pdrg.onBinaryDR(partitionId, startSequenceNumber, lastSequenceNumber,
+        return pdrg.onBinaryDR(lastCommittedSpHandle, partitionId, startSequenceNumber, lastSequenceNumber,
                 lastSpUniqueId, lastMpUniqueId, EventType.values()[eventType], buf);
     }
 
@@ -217,4 +238,7 @@ public class PartitionDRGateway implements DurableUniqueIdListener {
                                                  existingMetaTableForInsert, existingTupleTableForInsert,
                                                  newMetaTableForInsert, newTupleTableForInsert);
     }
+
+    @Override
+    public void transactionCommitted(long spHandle) {}
 }

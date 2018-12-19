@@ -81,6 +81,7 @@ class MaterializedViewInfo;
 
 namespace voltdb {
 class CoveringCellIndexTest_TableCompaction;
+class MaterializedViewTriggerForInsert;
 class MaterializedViewTriggerForWrite;
 class MaterializedViewHandler;
 class TableIndex;
@@ -544,6 +545,8 @@ public:
     std::pair<TableIndex const*, uint32_t> getUniqueIndexForDR();
 
     MaterializedViewHandler* materializedViewHandler() const { return m_mvHandler; }
+    MaterializedViewTriggerForInsert* materializedViewTrigger() const { return m_mvTrigger; }
+    void setMaterializedViewTrigger(MaterializedViewTriggerForInsert* trigger) { m_mvTrigger = trigger; }
 
     PersistentTable* deltaTable() const { return m_deltaTable; }
 
@@ -555,6 +558,20 @@ public:
     std::vector<uint64_t> getBlockAddresses() const;
 
     bool doDRActions(AbstractDRTupleStream* drStream);
+
+    // Create a delta table attached to this persistent table using exactly the same table schema.
+    void instantiateDeltaTable(bool needToCheckMemoryContext = true);
+    void releaseDeltaTable(bool needToCheckMemoryContext = true);
+
+    /**
+     * Loads tuple data from the serialized table.
+     * Used for snapshot restore and bulkLoad
+     */
+    void loadTuplesForLoadTable(SerializeInputBE& serialInput,
+                                Pool* stringPool = NULL,
+                                ReferenceSerializeOutput* uniqueViolationOutput = NULL,
+                                bool shouldDRStreamRows = false,
+                                bool ignoreTupleLimit = true);
 
 private:
     // Zero allocation size uses defaults.
@@ -619,6 +636,8 @@ private:
                                     TableTuple const& sourceTupleWithNewValues,
                                     std::vector<TableIndex*> const& indexesToUpdate);
 
+    // Add truncate operation to dr log stream if dr is enabled and running
+    void drLogTruncate(ExecutorContext* ec, bool fallible);
 
     void notifyBlockWasCompactedAway(TBPtr block);
 
@@ -654,7 +673,7 @@ private:
      */
     void deleteTupleStorage(TableTuple& tuple, TBPtr block = TBPtr(NULL), bool deleteLastEmptyBlock = false);
 
-    /*
+    /**
      * Implemented by persistent table and called by Table::loadTuplesFrom
      * for loadNextDependency or processRecoveryMessage
      */
@@ -679,9 +698,6 @@ private:
 
     AbstractDRTupleStream* getDRTupleStream(ExecutorContext* ec) {
         if (isReplicatedTable()) {
-            if (ec->drStream()->drProtocolVersion() >= DRTupleStream::NO_REPLICATED_STREAM_PROTOCOL_VERSION) {
-                return (ec->m_partitionId == 0) ? ec->drStream() : NULL;
-            }
             return ec->drReplicatedStream();
         }
         return ec->drStream();
@@ -808,6 +824,7 @@ private:
 
     // If this is a view table, maintain a handler to handle the view update work.
     MaterializedViewHandler* m_mvHandler;
+    MaterializedViewTriggerForInsert* m_mvTrigger;
 
     // If this is a source table of a view, notify all the relevant view handlers
     // when an update is needed.
@@ -1042,7 +1059,7 @@ inline void PersistentTable::deleteTupleStorage(TableTuple& tuple, TBPtr block,
         }
     }
 
-    bool transitioningToBlockWithSpace = !block->hasFreeTuples();
+    bool transitioningToBlockWithSpace = ! block->hasFreeTuples();
 
     int retval = block->freeTuple(tuple.address());
     if (retval != NO_NEW_BUCKET_INDEX) {

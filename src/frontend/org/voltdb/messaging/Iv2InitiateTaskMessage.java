@@ -39,7 +39,6 @@ public class Iv2InitiateTaskMessage extends TransactionInfoBaseMessage {
     // The default MP transaction id set by client interface when
     // initiating a single-partition transaction.
     public static final long UNUSED_MP_TXNID = Long.MIN_VALUE;
-    public static final long UNUSED_TRUNC_HANDLE = Long.MIN_VALUE;
 
     public static int SINGLE_PARTITION_MASK = 1;
     public static int N_PARTITION_MASK = 2;
@@ -58,7 +57,7 @@ public class Iv2InitiateTaskMessage extends TransactionInfoBaseMessage {
     AtomicBoolean m_isDurable;
 
     /** Empty constructor for de-serialization */
-    Iv2InitiateTaskMessage() {
+    public Iv2InitiateTaskMessage() {
         super();
     }
 
@@ -216,8 +215,8 @@ public class Iv2InitiateTaskMessage extends TransactionInfoBaseMessage {
         return m_nPartitions;
     }
 
-    @Override
-    public int getSerializedSize()
+
+    public int getFixedHeaderSize()
     {
         int msgsize = super.getSerializedSize();
         msgsize += 8; // m_clientInterfaceHandle
@@ -228,9 +227,15 @@ public class Iv2InitiateTaskMessage extends TransactionInfoBaseMessage {
         if (m_nPartitions != null) {
             msgsize += 2 + m_nPartitions.length * 4; // 2 for length prefix and 4 each
         }
-        msgsize += m_invocation.getSerializedSize();
         return msgsize;
     }
+
+    @Override
+    public int getSerializedSize()
+    {
+        return getFixedHeaderSize() + m_invocation.getSerializedSize();
+    }
+
 
     @Override
     public void flattenToBuffer(ByteBuffer buf) throws IOException
@@ -282,10 +287,9 @@ public class Iv2InitiateTaskMessage extends TransactionInfoBaseMessage {
         m_invocation.initFromBuffer(buf);
     }
 
-    @Override
-    public String toString() {
-        StringBuilder sb = new StringBuilder();
-
+    // Use this version when it is possible for multiple threads to make a string from the invocation
+    // at the same time (seems to only be an issue if the parameter to the procedure is a VoltTable)
+    public void toShortString(StringBuilder sb) {
         sb.append("IV2 INITITATE_TASK (FROM ");
         sb.append(CoreUtils.hsIdToString(getInitiatorHSId()));
         sb.append(" TO ");
@@ -316,6 +320,13 @@ public class Iv2InitiateTaskMessage extends TransactionInfoBaseMessage {
             sb.append("NOT REPLAY, ");
         sb.append("COORD ");
         sb.append(CoreUtils.hsIdToString(getCoordinatorHSId()));
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder sb = new StringBuilder();
+
+        toShortString(sb);
 
         if (m_invocation != null) {
             sb.append("\n  PROCEDURE: ");

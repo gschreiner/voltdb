@@ -4,9 +4,9 @@
 #
 ########################################################################
 #
-# We give compiler options is two parts.  One is the set of base
+# We give compiler options in two parts.  One is the set of base
 # options, which all compilations use.  The second is the set of
-# compiler, platform and version options.
+# compiler, platform, and version options.
 #
 # These are the base compiler options, and some
 # other linker options.
@@ -76,6 +76,10 @@ VOLTDB_ADD_COMPILE_OPTIONS(
 
 IF ( ${VOLT_POOL_CHECKING} )
   VOLTDB_ADD_COMPILE_OPTIONS(-DVOLT_POOL_CHECKING=1)
+ENDIF()
+
+IF ( ${VOLT_TIMER_ENABLED} )
+  VOLTDB_ADD_COMPILE_OPTIONS(-DVOLT_TIMER_ENABLED=1)
 ENDIF()
 
 # Set coverage and profiling options

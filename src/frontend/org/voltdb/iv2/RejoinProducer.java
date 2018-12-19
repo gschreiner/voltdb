@@ -24,6 +24,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.voltcore.logging.VoltLogger;
 import org.voltcore.messaging.Mailbox;
@@ -34,12 +35,15 @@ import org.voltdb.SiteProcedureConnection;
 import org.voltdb.SnapshotCompletionInterest.SnapshotCompletionEvent;
 import org.voltdb.SnapshotSaveAPI;
 import org.voltdb.VoltDB;
+import org.voltdb.catalog.Database;
+import org.voltdb.catalog.Table;
 import org.voltdb.messaging.RejoinMessage;
 import org.voltdb.messaging.RejoinMessage.Type;
 import org.voltdb.rejoin.StreamSnapshotDataTarget;
 import org.voltdb.rejoin.StreamSnapshotSink;
 import org.voltdb.rejoin.StreamSnapshotSink.RestoreWork;
 import org.voltdb.rejoin.TaskLog;
+import org.voltdb.utils.CatalogUtil;
 
 /**
  * Manages the lifecycle of snapshot serialization to a site
@@ -52,9 +56,15 @@ public class RejoinProducer extends JoinProducerBase {
     private static ScheduledFuture<?> m_timeFuture;
     private Mailbox m_streamSnapshotMb = null;
     private StreamSnapshotSink m_rejoinSiteProcessor = null;
+    // Stores the name of the views to pause/resume during a rejoin stream snapshot restore process.
+    private String m_commaSeparatedNameOfViewsToPause = null;
 
     // True if we're handling a table-less rejoin.
     boolean m_schemaHasNoTables = false;
+
+    // Barrier that prevents the finish task for firing until all sites have finished the stream snapshot
+    private static AtomicInteger s_streamingSiteCount;
+
 
     // Get the snapshot nonce from the RejoinCoordinator's INITIATION message.
     // Then register the completion interest.
@@ -115,6 +125,10 @@ public class RejoinProducer extends JoinProducerBase {
         }
     }
 
+    public static void initBarrier(int siteCount) {
+        s_streamingSiteCount = new AtomicInteger(siteCount);
+    }
+
     // Run if the watchdog isn't cancelled within the timeout period
     private static class TimerCallback implements Runnable
     {
@@ -152,10 +166,8 @@ public class RejoinProducer extends JoinProducerBase {
     @Override
     public void deliver(RejoinMessage message)
     {
-        if (message.getType() == RejoinMessage.Type.INITIATION) {
-            doInitiation(message);
-        }
-        else if (message.getType() == RejoinMessage.Type.INITIATION_COMMUNITY) {
+        if (message.getType() == RejoinMessage.Type.INITIATION
+                || message.getType() == RejoinMessage.Type.INITIATION_COMMUNITY) {
             doInitiation(message);
         }
         else {
@@ -268,6 +280,30 @@ public class RejoinProducer extends JoinProducerBase {
     public void runForRejoin(SiteProcedureConnection siteConnection,
             TaskLog m_taskLog) throws IOException
     {
+        // After doInitialization(), the rejoin producer is inserted into the task queue,
+        // and then we come here repeatedly until the stream snapshot restore finishes.
+        // The first time when this producer method is run (m_commaSeparatedNameOfViewsToPause is null),
+        // we need to figure out which views to pause so that they are handled properly
+        // before the snapshot streams arrive.
+        if (m_commaSeparatedNameOfViewsToPause == null) {
+            // The very first execution of runForRejoin will lead us here.
+            StringBuilder commaSeparatedViewNames = new StringBuilder();
+            Database db = VoltDB.instance().getCatalogContext().database;
+            for (Table table : VoltDB.instance().getCatalogContext().tables) {
+                if (CatalogUtil.isSnapshotablePersistentTableView(db, table)) {
+                    // If the table is a snapshotted persistent table view, we will try to
+                    // temporarily disable its maintenance job to boost restore performance.
+                    commaSeparatedViewNames.append(table.getTypeName()).append(",");
+                }
+            }
+            // Get rid of the trailing comma.
+            if (commaSeparatedViewNames.length() > 0) {
+                commaSeparatedViewNames.setLength(commaSeparatedViewNames.length() - 1);
+            }
+            m_commaSeparatedNameOfViewsToPause = commaSeparatedViewNames.toString();
+            // Set enabled to false for the views we found.
+            siteConnection.setViewsEnabled(m_commaSeparatedNameOfViewsToPause, false);
+        }
         if (!m_schemaHasNoTables) {
             boolean sourcesReady = false;
             RestoreWork rejoinWork = m_rejoinSiteProcessor.poll(m_snapshotBufferAllocator);
@@ -282,11 +318,23 @@ public class RejoinProducer extends JoinProducerBase {
                 REJOINLOG.debug(m_whoami + "Rejoin snapshot transfer is finished");
                 m_rejoinSiteProcessor.close();
 
+                boolean allSitesFinishStreaming;
                 if (m_streamSnapshotMb != null) {
                     VoltDB.instance().getHostMessenger().removeMailbox(m_streamSnapshotMb.getHSId());
+                    m_streamSnapshotMb = null;
+                    allSitesFinishStreaming = s_streamingSiteCount.decrementAndGet() == 0;
                 }
-
-                doFinishingTask(siteConnection);
+                else {
+                    int pendingSites = s_streamingSiteCount.get();
+                    assert(pendingSites >= 0);
+                    allSitesFinishStreaming = pendingSites == 0;
+                }
+                if (allSitesFinishStreaming) {
+                    doFinishingTask(siteConnection);
+                }
+                else {
+                    returnToTaskQueue(sourcesReady);
+                }
             }
         }
         else {
@@ -321,6 +369,9 @@ public class RejoinProducer extends JoinProducerBase {
                     m_taskQueue.offer(this);
                     return;
                 }
+                assert(m_commaSeparatedNameOfViewsToPause != null);
+                // Resume the views.
+                siteConnection.setViewsEnabled(m_commaSeparatedNameOfViewsToPause, true);
                 SnapshotCompletionEvent event = null;
                 Map<String, Map<Integer, Pair<Long,Long>>> exportSequenceNumbers = null;
                 Map<Integer, Long> drSequenceNumbers = null;

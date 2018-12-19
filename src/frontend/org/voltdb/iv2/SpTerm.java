@@ -29,7 +29,6 @@ import org.voltcore.utils.Pair;
 import org.voltcore.zk.BabySitter;
 import org.voltcore.zk.BabySitter.Callback;
 import org.voltcore.zk.LeaderElector;
-import org.voltdb.StartAction;
 import org.voltdb.VoltDB;
 import org.voltdb.VoltZK;
 
@@ -50,8 +49,9 @@ public class SpTerm implements Term
     protected BabySitter m_babySitter;
     private ImmutableList<Long> m_replicas = ImmutableList.of();
     private boolean m_replicasUpdatedRequired = false;
-    private boolean m_initJoin = StartAction.JOIN.equals(VoltDB.instance().getConfig().m_startAction);
+    private boolean m_initJoin = VoltDB.instance().isJoining();
     private final int m_kFactor = VoltDB.instance().getKFactor();
+    private boolean m_promoting = false;
 
     // runs on the babysitter thread when a replica changes.
     // simply forward the notice to the initiator mailbox; it controls
@@ -78,6 +78,14 @@ public class SpTerm implements Term
                 }
             }
 
+            // Since we don't shutdown SpTerm when current site is no longer leader
+            // (see explanation at SpInitiator, m_leadersChangeHandler handler),
+            // ask non-leader (from scheduler perspective) to ignore replica list change.
+            if (!m_promoting && !m_mailbox.m_scheduler.isLeader()) {
+                m_replicas = ImmutableList.copyOf(replicas);
+                return;
+            }
+
             // for joining nodes that hasn't been fully initialized
             // still update replicas for allowing all replicas receive fragment tasks
             if (m_initJoin) {
@@ -88,7 +96,7 @@ public class SpTerm implements Term
                 m_replicasUpdatedRequired = false;
             }
             if (m_replicas.isEmpty() || replicas.size() <= m_replicas.size()) {
-                //The cases for startup or host failure/
+                //The cases for startup or host failure
                 m_mailbox.updateReplicas(replicas, null);
                 m_replicasUpdatedRequired = false;
             } else {
@@ -121,6 +129,7 @@ public class SpTerm implements Term
     public void start()
     {
         try {
+            m_promoting = true;
             Pair<BabySitter, List<String>> pair = BabySitter.blockingFactory(m_zk,
                     LeaderElector.electionDirForPartition(VoltZK.leaders_initiators, m_partitionId),
                     m_replicasChangeHandler);
@@ -166,5 +175,9 @@ public class SpTerm implements Term
             m_replicasUpdatedRequired = false;
         }
         return replicasAdded;
+    }
+
+    public void setPromoting(boolean promoting) {
+        m_promoting = promoting;
     }
 }

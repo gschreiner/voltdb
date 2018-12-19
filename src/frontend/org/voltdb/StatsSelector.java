@@ -54,11 +54,14 @@ public enum StatsSelector {
     DRROLE,
 
     TOPO,           // return leader and site info for iv2
+    TTL,            // return time to live info
     REBALANCE,      // return elastic rebalance progress
     KSAFETY,        // return ksafety coverage information
     CPU,            // return CPU Stats
     GC,             // return GC Stats
 
     COMMANDLOG,     // return number of outstanding bytes and txns on this node
-    IMPORTER
+    IMPORTER,       // synonym as IMPORT for backward compatibility
+    IMPORT,
+    EXPORT
 }

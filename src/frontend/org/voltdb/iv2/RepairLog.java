@@ -25,6 +25,7 @@ import java.util.Deque;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.voltcore.logging.VoltLogger;
 import org.voltcore.messaging.VoltMessage;
@@ -49,7 +50,7 @@ public class RepairLog
     private static final boolean IS_SP = true;
     private static final boolean IS_MP = false;
 
-    VoltLogger tmLog = new VoltLogger("TM");
+    VoltLogger repairLogger = new VoltLogger("REPAIR");
 
     // Initialize to Long MAX_VALUE to prevent feeding a newly joined node
     // transactions it should never have seen
@@ -58,7 +59,7 @@ public class RepairLog
 
     // Truncation point
     long m_truncationHandle = Long.MIN_VALUE;
-    final List<TransactionCommitInterest> m_txnCommitInterests = new ArrayList<>();
+    final List<TransactionCommitInterest> m_txnCommitInterests = new CopyOnWriteArrayList<>();
 
     // is this a partition leader?
     boolean m_isLeader = false;
@@ -148,17 +149,26 @@ public class RepairLog
         }
     }
 
+    boolean hasNoTxnCommitInterests() {
+        return m_txnCommitInterests.isEmpty();
+    }
+
+    void notifyTxnCommitInterests(long handle) {
+        for (TransactionCommitInterest txnCommitInterest : m_txnCommitInterests) {
+            txnCommitInterest.transactionCommitted(handle);
+        }
+    }
+
     // Offer a new message to the repair log. This will truncate
     // the repairLog if the message includes a truncation hint.
     public void deliver(VoltMessage msg)
     {
         if (!m_isLeader && msg instanceof Iv2InitiateTaskMessage) {
-            final Iv2InitiateTaskMessage m = (Iv2InitiateTaskMessage)msg;
+            final Iv2InitiateTaskMessage m = (Iv2InitiateTaskMessage) msg;
             // We can't repair read only SP transactions. Just don't log them to the repair log.
             if (m.isReadOnly()) {
                 return;
             }
-
             m_lastSpHandle = m.getSpHandle();
             truncate(m.getTruncationHandle(), IS_SP);
 
@@ -200,7 +210,7 @@ public class RepairLog
 
             // We can't repair read only MP transactions. Just don't log them to the repair log.
             // Restart transaction do not need to be repaired here, don't log them as well.
-            if (ctm.isReadOnly() || ctm.isRestart()) {
+            if (ctm.isReadOnly() || ctm.isRestart() || ctm.isAbortDuringRepair()) {
                 return;
             }
 
@@ -210,10 +220,10 @@ public class RepairLog
         }
         else if (msg instanceof DumpMessage) {
             String who = CoreUtils.hsIdToString(m_HSId);
-            tmLog.warn("Repair log dump for site: " + who + ", isLeader: " + m_isLeader
+            repairLogger.warn("Repair log dump for site: " + who + ", isLeader: " + m_isLeader
                     + ", " + who + ": lastSpHandle: " + m_lastSpHandle + ", lastMpHandle: " + m_lastMpHandle);
             for (Iv2RepairLogResponseMessage il : contents(0l, false)) {
-               tmLog.warn("[Repair log contents]" + who + ": msg: " + il);
+               repairLogger.warn("[Repair log contents]" + who + ": msg: " + il);
             }
         }
         else if (msg instanceof RepairLogTruncationMessage) {
@@ -235,9 +245,7 @@ public class RepairLog
             deq = m_logSP;
             if (m_truncationHandle < handle) {
                 m_truncationHandle = handle;
-                for (TransactionCommitInterest interest : m_txnCommitInterests) {
-                    interest.transactionCommitted(m_truncationHandle);
-                }
+                notifyTxnCommitInterests(handle);
             }
         }
         else {
@@ -290,8 +298,8 @@ public class RepairLog
         Collections.sort(items, m_handleComparator);
 
         int ofTotal = items.size() + 1;
-        if (tmLog.isDebugEnabled()) {
-            tmLog.debug("Responding with " + ofTotal + " repair log parts.");
+        if (repairLogger.isDebugEnabled()) {
+            repairLogger.debug("Responding with " + ofTotal + " repair log parts.");
         }
         List<Iv2RepairLogResponseMessage> responses =
             new LinkedList<Iv2RepairLogResponseMessage>();
@@ -325,7 +333,7 @@ public class RepairLog
         return responses;
     }
 
-    public void registerTransactionCommitInterest(TransactionCommitInterest interest)
+    void registerTransactionCommitInterest(TransactionCommitInterest interest)
     {
         m_txnCommitInterests.add(interest);
     }

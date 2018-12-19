@@ -45,14 +45,11 @@
 
 #include "persistenttable.h"
 
-#include "AbstractDRTupleStream.h"
-#include "DRTupleStream.h"
 #include "ConstraintFailureException.h"
 #include "CopyOnWriteContext.h"
 #include "DRTupleStreamUndoAction.h"
 #include "MaterializedViewHandler.h"
 #include "MaterializedViewTriggerForWrite.h"
-#include "PersistentTableStats.h"
 #include "PersistentTableUndoInsertAction.h"
 #include "PersistentTableUndoDeleteAction.h"
 #include "PersistentTableUndoTruncateTableAction.h"
@@ -60,43 +57,24 @@
 #include "PersistentTableUndoUpdateAction.h"
 #include "TableCatalogDelegate.hpp"
 #include "tablefactory.h"
-#include "tableiterator.h"
 #include "TupleStreamException.h"
 
-#include "common/debuglog.h"
 #include "common/ExecuteWithMpMemory.h"
-#include "common/serializeio.h"
 #include "common/FailureInjection.h"
-#include "common/tabletuple.h"
-#include "common/UndoQuantum.h"
-#include "common/executorcontext.hpp"
-#include "common/FatalException.hpp"
-#include "common/types.h"
 #include "common/RecoveryProtoMessage.h"
-#include "common/StreamPredicateList.h"
-#include "common/ValueFactory.hpp"
-#include "catalog/catalog.h"
-#include "catalog/database.h"
-#include "catalog/table.h"
-#include "catalog/materializedviewinfo.h"
 #include "crc/crc32c.h"
 #include "indexes/tableindex.h"
 #include "indexes/tableindexfactory.h"
-#include "logging/LogManager.h"
 
 #include <boost/date_time/posix_time/posix_time.hpp>
-#include <boost/foreach.hpp>
-#include <boost/scoped_ptr.hpp>
-
-#include <algorithm> // std::find
-#include <cassert>
-#include <cstdio>
-#include <sstream>
-#include <utility>
 
 namespace voltdb {
 
 #define TABLE_BLOCKSIZE 2097152
+
+   template<typename T> inline static T* partialCopyToPool(Pool* pool, const T* src, size_t partialSize) {
+      return reinterpret_cast<T*>(memcpy(pool->allocate(partialSize), src, partialSize));
+   }
 
 class SetAndRestorePendingDeleteFlag
 {
@@ -150,6 +128,7 @@ PersistentTable::PersistentTable(int partitionColumn,
     , m_drTimestampColumnIndex(-1)
     , m_pkeyIndex(NULL)
     , m_mvHandler(NULL)
+    , m_mvTrigger(NULL)
     , m_viewHandlers()
     , m_deltaTable(NULL)
     , m_deltaTableActive(false)
@@ -318,23 +297,27 @@ void PersistentTable::nextFreeTuple(TableTuple* tuple) {
     }
 }
 
-void PersistentTable::deleteAllTuples(bool, bool fallible) {
-    // Instead of recording each tuple deletion, log it as a table truncation DR.
-    ExecutorContext* ec = ExecutorContext::getExecutorContext();
+void PersistentTable::drLogTruncate(ExecutorContext* ec, bool fallible) {
     AbstractDRTupleStream* drStream = getDRTupleStream(ec);
     if (doDRActions(drStream)) {
         int64_t lastCommittedSpHandle = ec->lastCommittedSpHandle();
         int64_t currentSpHandle = ec->currentSpHandle();
         int64_t currentUniqueId = ec->currentUniqueId();
-        size_t drMark = drStream->truncateTable(lastCommittedSpHandle, m_signature,
-                m_name, m_partitionColumn, currentSpHandle, currentUniqueId);
+        size_t drMark = drStream->truncateTable(lastCommittedSpHandle, m_signature, m_name, m_partitionColumn,
+                currentSpHandle, currentUniqueId);
 
-        UndoQuantum* uq = ExecutorContext::currentUndoQuantum();
+        UndoQuantum* uq = ec->getCurrentUndoQuantum();
         if (uq && fallible) {
-            uq->registerUndoAction(new (*uq) DRTupleStreamUndoAction(drStream, drMark,
-                    rowCostForDRRecord(DR_RECORD_TRUNCATE_TABLE)));
+            uq->registerUndoAction(
+                    new (*uq) DRTupleStreamUndoAction(drStream, drMark, rowCostForDRRecord(DR_RECORD_TRUNCATE_TABLE)));
         }
     }
+}
+
+void PersistentTable::deleteAllTuples(bool, bool fallible) {
+    // Instead of recording each tuple deletion, log it as a table truncation DR.
+    ExecutorContext* ec = ExecutorContext::getExecutorContext();
+    drLogTruncate(ec, fallible);
 
     // Temporarily disable DR binary logging so that it doesn't record the
     // individual deletions below.
@@ -429,6 +412,8 @@ template<class T> static inline PersistentTable* constructEmptyDestTable(
 
 void PersistentTable::truncateTable(VoltDBEngine* engine, bool replicatedTable, bool fallible) {
     if (isPersistentTableEmpty()) {
+        // Always log the the truncate if dr is enabled, see ENG-14528.
+        drLogTruncate(ExecutorContext::getExecutorContext(), fallible);
         return;
     }
 
@@ -556,20 +541,9 @@ void PersistentTable::truncateTable(VoltDBEngine* engine, bool replicatedTable, 
     engine->rebuildTableCollections(replicatedTable, false);
 
     ExecutorContext* ec = ExecutorContext::getExecutorContext();
-    AbstractDRTupleStream* drStream = getDRTupleStream(ec);
-    UndoQuantum* uq = ExecutorContext::currentUndoQuantum();
-    if (doDRActions(drStream)) {
-        int64_t lastCommittedSpHandle = ec->lastCommittedSpHandle();
-        int64_t currentSpHandle = ec->currentSpHandle();
-        int64_t currentUniqueId = ec->currentUniqueId();
-        size_t drMark = drStream->truncateTable(lastCommittedSpHandle, m_signature, m_name, m_partitionColumn,
-                                                currentSpHandle, currentUniqueId);
+    drLogTruncate(ec, fallible);
 
-        if (uq && fallible) {
-            uq->registerUndoAction(new (*uq) DRTupleStreamUndoAction(drStream, drMark, rowCostForDRRecord(DR_RECORD_TRUNCATE_TABLE)));
-        }
-    }
-
+    UndoQuantum* uq = ec->getCurrentUndoQuantum();
     if (uq) {
         if (!fallible) {
             throwFatalException("Attempted to truncate table %s when there was an "
@@ -580,7 +554,7 @@ void PersistentTable::truncateTable(VoltDBEngine* engine, bool replicatedTable, 
         emptyTable->m_invisibleTuplesPendingDeleteCount = emptyTable->m_tupleCount;
         // Create and register an undo action.
         UndoReleaseAction* undoAction = new (*uq) PersistentTableUndoTruncateTableAction(tcd, this, emptyTable, replicatedTable);
-        SynchronizedThreadLock::addUndoAction(isCatalogTableReplicated(), uq, undoAction);
+        SynchronizedThreadLock::addUndoAction(isCatalogTableReplicated(), uq, undoAction, NULL, this);
     }
     else {
         if (fallible) {
@@ -765,7 +739,9 @@ void PersistentTable::setDRTimestampForTuple(ExecutorContext* ec, TableTuple& tu
 
 void PersistentTable::insertTupleIntoDeltaTable(TableTuple& source, bool fallible) {
     // If the current table does not have a delta table, return.
-    if (! m_deltaTable) {
+    // If the current table has a delta table, but it is used by
+    // a single table view during snapshot restore process, return.
+    if (! m_deltaTable || m_mvTrigger) {
         return;
     }
 
@@ -908,11 +884,11 @@ void PersistentTable::doInsertTupleCommon(TableTuple& source, TableTuple& target
          */
         UndoQuantum *uq = ExecutorContext::currentUndoQuantum();
         if (uq) {
-            char* tupleData = uq->allocatePooledCopy(target.address(), target.tupleLength());
+           char* tupleData = partialCopyToPool(uq->getPool(), target.address(), target.tupleLength());
             //* enable for debug */ std::cout << "DEBUG: inserting " << (void*)target.address()
             //* enable for debug */           << " { " << target.debugNoHeader() << " } "
             //* enable for debug */           << " copied to " << (void*)tupleData << std::endl;
-            UndoReleaseAction* undoAction = new (*uq) PersistentTableUndoInsertAction(tupleData, &m_surgeon);
+            UndoReleaseAction* undoAction = createInstanceFromPool<PersistentTableUndoInsertAction>(*uq->getPool(), tupleData, &m_surgeon);
             SynchronizedThreadLock::addUndoAction(isCatalogTableReplicated(), uq, undoAction);
         }
     }
@@ -1011,7 +987,7 @@ void PersistentTable::updateTupleWithSpecificIndexes(TableTuple& targetTupleToUp
              * For undo purposes, before making any changes, save a copy of the state of the tuple
              * into the undo pool temp storage and hold onto it with oldTupleData.
              */
-            oldTupleData = uq->allocatePooledCopy(targetTupleToUpdate.address(), targetTupleToUpdate.tupleLength());
+           oldTupleData = partialCopyToPool(uq->getPool(), targetTupleToUpdate.address(), targetTupleToUpdate.tupleLength());
         }
     }
 
@@ -1033,7 +1009,8 @@ void PersistentTable::updateTupleWithSpecificIndexes(TableTuple& targetTupleToUp
 
         UndoQuantum* uq = ExecutorContext::currentUndoQuantum();
         if (uq && fallible) {
-            uq->registerUndoAction(new (*uq) DRTupleStreamUndoAction(drStream, drMark, rowCostForDRRecord(DR_RECORD_UPDATE)));
+            uq->registerUndoAction(createInstanceFromPool<DRTupleStreamUndoAction>(
+                     *uq->getPool(), drStream, drMark, rowCostForDRRecord(DR_RECORD_UPDATE)));
         }
     }
 
@@ -1118,10 +1095,9 @@ void PersistentTable::updateTupleWithSpecificIndexes(TableTuple& targetTupleToUp
          * Create and register an undo action with copies of the "before" and "after" tuple storage
          * and the "before" and "after" object pointers for non-inlined columns that changed.
          */
-        char* newTupleData = uq->allocatePooledCopy(targetTupleToUpdate.address(), tupleLength);
-        UndoReleaseAction* undoAction = new (*uq) PersistentTableUndoUpdateAction(oldTupleData, newTupleData,
-                                                                           oldObjects, newObjects,
-                                                                           &m_surgeon, someIndexGotUpdated);
+       char* newTupleData = partialCopyToPool(uq->getPool(), targetTupleToUpdate.address(), tupleLength);
+        UndoReleaseAction* undoAction = createInstanceFromPool<PersistentTableUndoUpdateAction>(
+              *uq->getPool(), oldTupleData, newTupleData, oldObjects, newObjects, &m_surgeon, someIndexGotUpdated);
         SynchronizedThreadLock::addUndoAction(isCatalogTableReplicated(), uq, undoAction);
     }
     else {
@@ -1245,7 +1221,8 @@ void PersistentTable::deleteTuple(TableTuple& target, bool fallible) {
                                               currentUniqueId, target, DR_RECORD_DELETE);
 
         if (createUndoAction) {
-            uq->registerUndoAction(new (*uq) DRTupleStreamUndoAction(drStream, drMark, rowCostForDRRecord(DR_RECORD_DELETE)));
+            uq->registerUndoAction(createInstanceFromPool<DRTupleStreamUndoAction>(
+                     *uq->getPool(), drStream, drMark, rowCostForDRRecord(DR_RECORD_DELETE)));
         }
     }
 
@@ -1256,7 +1233,8 @@ void PersistentTable::deleteTuple(TableTuple& target, bool fallible) {
         target.setPendingDeleteOnUndoReleaseTrue();
         ++m_tuplesPinnedByUndo;
         ++m_invisibleTuplesPendingDeleteCount;
-        UndoReleaseAction* undoAction = new (*uq) PersistentTableUndoDeleteAction(target.address(), &m_surgeon);
+        UndoReleaseAction* undoAction = createInstanceFromPool<PersistentTableUndoDeleteAction>(
+              *uq->getPool(), target.address(), &m_surgeon);
         SynchronizedThreadLock::addUndoAction(isCatalogTableReplicated(), uq, undoAction, this);
     }
 
@@ -1268,12 +1246,10 @@ void PersistentTable::deleteTuple(TableTuple& target, bool fallible) {
     insertTupleIntoDeltaTable(target, fallible);
     {
         SetAndRestorePendingDeleteFlag setPending(target);
-
         // for multi-table views
         BOOST_FOREACH (auto viewHandler, m_viewHandlers) {
             viewHandler->handleTupleDelete(this, fallible);
         }
-
         // This is for single table view.
         BOOST_FOREACH (auto view, m_views) {
             view->processTupleDelete(target, fallible);
@@ -1571,6 +1547,100 @@ std::string PersistentTable::debug(const std::string& spacer) const {
     return buffer.str();
 }
 
+/**
+ * Loads tuple data from the serialized table.
+ * Used for snapshot restore and bulkLoad
+ */
+void PersistentTable::loadTuplesForLoadTable(SerializeInputBE &serialInput,
+                                             Pool *stringPool,
+                                             ReferenceSerializeOutput *uniqueViolationOutput,
+                                             bool shouldDRStreamRows,
+                                             bool ignoreTupleLimit) {
+    serialInput.readInt(); // rowstart
+
+    serialInput.readByte();
+
+    int16_t colcount = serialInput.readShort();
+    assert(colcount >= 0);
+
+    // Store the following information so that we can provide them to the user
+    // on failure
+    ValueType types[colcount];
+    boost::scoped_array<std::string> names(new std::string[colcount]);
+
+    // skip the column types
+    for (int i = 0; i < colcount; ++i) {
+        types[i] = (ValueType) serialInput.readEnumInSingleByte();
+    }
+
+    // skip the column names
+    for (int i = 0; i < colcount; ++i) {
+        names[i] = serialInput.readTextString();
+    }
+
+    // Check if the column count matches what the temp table is expecting
+    int16_t expectedColumnCount = static_cast<int16_t>(m_schema->columnCount() + m_schema->hiddenColumnCount());
+    if (colcount != expectedColumnCount) {
+        std::stringstream message(std::stringstream::in
+                                  | std::stringstream::out);
+        message << "Column count mismatch. Expecting "
+                << expectedColumnCount
+                << ", but " << colcount << " given" << std::endl;
+        message << "Expecting the following columns:" << std::endl;
+        message << debug() << std::endl;
+        message << "The following columns are given:" << std::endl;
+        for (int i = 0; i < colcount; i++) {
+            message << "column " << i << ": " << names[i]
+                    << ", type = " << getTypeName(types[i]) << std::endl;
+        }
+        throw SerializableEEException(VOLT_EE_EXCEPTION_TYPE_EEEXCEPTION,
+                                      message.str().c_str());
+    }
+
+    int tupleCount = serialInput.readInt();
+    assert(tupleCount >= 0);
+
+    TableTuple target(m_schema);
+    //Reserve space for a length prefix for rows that violate unique constraints
+    //If there is no output supplied it will just throw
+    size_t lengthPosition = 0;
+    int32_t serializedTupleCount = 0;
+    size_t tupleCountPosition = 0;
+    if (uniqueViolationOutput != NULL) {
+        lengthPosition = uniqueViolationOutput->reserveBytes(4);
+    }
+
+    for (int i = 0; i < tupleCount; ++i) {
+        nextFreeTuple(&target);
+        target.setActiveTrue();
+        target.setDirtyFalse();
+        target.setPendingDeleteFalse();
+        target.setPendingDeleteOnUndoReleaseFalse();
+
+        try {
+            target.deserializeFrom(serialInput, stringPool);
+        } catch (SQLException &e) {
+            deleteTupleStorage(target);
+            throw;
+        }
+        processLoadedTuple(target, uniqueViolationOutput, serializedTupleCount, tupleCountPosition,
+                           shouldDRStreamRows, ignoreTupleLimit);
+    }
+
+    //If unique constraints are being handled, write the length/size of constraints that occured
+    if (uniqueViolationOutput != NULL) {
+        if (serializedTupleCount == 0) {
+            uniqueViolationOutput->writeIntAt(lengthPosition, 0);
+        } else {
+            uniqueViolationOutput->writeIntAt(lengthPosition,
+                                              static_cast<int32_t>(uniqueViolationOutput->position() -
+                                                                   lengthPosition - sizeof(int32_t)));
+            uniqueViolationOutput->writeIntAt(tupleCountPosition,
+                                              serializedTupleCount);
+        }
+    }
+}
+
 /*
  * Implemented by persistent table and called by Table::loadTuplesFrom or Table::loadTuplesForLoadTable
  * to do additional processing for views, Export, DR and non-inline
@@ -1584,9 +1654,9 @@ void PersistentTable::processLoadedTuple(TableTuple& tuple,
                                          bool ignoreTupleLimit) {
     try {
         if (!ignoreTupleLimit && visibleTupleCount() >= m_tupleLimit) {
-                    std::ostringstream str;
-                    str << "Table " << m_name << " exceeds table maximum row count " << m_tupleLimit;
-                    throw ConstraintFailureException(this, tuple, str.str(), (! uniqueViolationOutput) ? &m_surgeon : NULL);
+            std::ostringstream str;
+            str << "Table " << m_name << " exceeds table maximum row count " << m_tupleLimit;
+            throw ConstraintFailureException(this, tuple, str.str(), (! uniqueViolationOutput) ? &m_surgeon : NULL);
         }
         insertTupleCommon(tuple, tuple, true, shouldDRStreamRows, !uniqueViolationOutput);
     } catch (ConstraintFailureException& e) {
@@ -2201,20 +2271,43 @@ void PersistentTable::configureIndexStats() {
     }
 }
 
+// Create a delta table attached to this persistent table using exactly the same table schema.
+void PersistentTable::instantiateDeltaTable(bool needToCheckMemoryContext) {
+    if (m_deltaTable) {
+        // Each persistent table can only have exactly one attached delta table.
+        return;
+    }
+    VoltDBEngine* engine = ExecutorContext::getEngine();
+    // When adding view handlers from partitioned tables to replicated source tables, all partitions race to
+    // add the delta table for the replicated table. Therefore, it is likely that the first to add the delta
+    // table is not the lowest site. All add Views are done holding a global mutex so structure management is
+    // safe. However when the replicated table is deallocated it also deallocates the delta table so the memory
+    // allocation of the delta table needs to be done in the lowest site thread's context.
+    assert(m_deltaTable == NULL);
+    VOLT_TRACE("%s to check the memory context to use.\n", needToCheckMemoryContext?"Need":"No need");
+    ConditionalExecuteWithMpMemory usingMpMemoryIfReplicated(m_isReplicated && needToCheckMemoryContext);
+    TableCatalogDelegate* tcd = engine->getTableDelegate(m_name);
+    m_deltaTable = tcd->createDeltaTable(*engine->getDatabase(), *engine->getCatalogTable(m_name));
+    VOLT_DEBUG("Engine %p (%d) create delta table %p for table %s", engine,
+               engine->getPartitionId(), m_deltaTable, m_name.c_str());
+}
+
+void PersistentTable::releaseDeltaTable(bool needToCheckMemoryContext) {
+    if (! m_deltaTable) {
+        return;
+    }
+    VOLT_DEBUG("Engine %d drop delta table %p for table %s",
+               ExecutorContext::getEngine()->getPartitionId(), m_deltaTable, m_name.c_str());
+    VOLT_TRACE("%s to check the memory context to use.\n", needToCheckMemoryContext?"Need":"No need");
+    ConditionalExecuteWithMpMemory usingMpMemoryIfReplicated(m_isReplicated && needToCheckMemoryContext);
+    // If both the source and dest tables are replicated we are already in the Mp Memory Context
+    m_deltaTable->decrementRefcount();
+    m_deltaTable = NULL;
+}
+
 void PersistentTable::addViewHandler(MaterializedViewHandler* viewHandler) {
     if (m_viewHandlers.size() == 0) {
-        VoltDBEngine* engine = ExecutorContext::getEngine();
-        // When adding view handlers from partitioned tables to replicated source tables all partitions race to
-        // add the delta table for the replicated table. Therefore, it is likely that the first to add the delta
-        // table is not the lowest site. All add Views are done holding a global mutex so structure management is
-        // safe. However when the replicated table is deallocated it also deallocates the delta table so the memory
-        // allocation of the delta table needs to be done in the lowest site thread's context.
-        assert(m_deltaTable == NULL);
-        ConditionalExecuteWithMpMemory usingMpMemoryIfReplicated(m_isReplicated);
-        TableCatalogDelegate* tcd = engine->getTableDelegate(m_name);
-        m_deltaTable = tcd->createDeltaTable(*engine->getDatabase(), *engine->getCatalogTable(m_name));
-        VOLT_DEBUG("Engine %p (%d) create delta table %p for table %s", engine,
-                engine->getPartitionId(), m_deltaTable, m_name.c_str());
+        instantiateDeltaTable();
     }
     m_viewHandlers.push_back(viewHandler);
 }
@@ -2234,12 +2327,7 @@ void PersistentTable::dropViewHandler(MaterializedViewHandler* viewHandler) {
     // The last element is now excess.
     m_viewHandlers.pop_back();
     if (m_viewHandlers.size() == 0) {
-        VOLT_DEBUG("Engine %d drop delta table %p for table %s",
-                ExecutorContext::getEngine()->getPartitionId(), m_deltaTable, m_name.c_str());
-        ConditionalExecuteWithMpMemory usingMpMemoryIfReplicated(m_isReplicated);
-        // If both the source and dest tables are replicated we are already in the Mp Memory Context
-        m_deltaTable->decrementRefcount();
-        m_deltaTable = NULL;
+        releaseDeltaTable();
     }
 }
 

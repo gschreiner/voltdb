@@ -23,6 +23,10 @@
 
 package org.voltdb.export;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.assertTrue;
 import static org.voltdb.export.ExportMatchers.ackMbxMessageIs;
 
 import java.io.File;
@@ -41,6 +45,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 import org.voltcore.messaging.VoltMessage;
 import org.voltcore.utils.CoreUtils;
+import org.voltcore.utils.Pair;
 import org.voltcore.zk.ZKUtil;
 import org.voltdb.MockVoltDB;
 import org.voltdb.VoltDB;
@@ -57,10 +62,6 @@ import org.voltdb.utils.MiscUtils;
 
 import com.google_voltpatches.common.base.Throwables;
 import com.google_voltpatches.common.collect.ImmutableList;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
 
 public class TestExportGeneration {
 
@@ -141,7 +142,7 @@ public class TestExportGeneration {
 
         m_exportGeneration.initializeGenerationFromCatalog(m_mockVoltDB.getCatalogContext(),
                 m_connectors, m_mockVoltDB.m_hostId, m_mockVoltDB.getHostMessenger(),
-                ImmutableList.of(m_part));
+                ImmutableList.of(Pair.of(m_part, CoreUtils.getSiteIdFromHSId(m_site))));
 
         m_mbox = new LocalMailbox(m_mockVoltDB.getHostMessenger()) {
             @Override
@@ -187,30 +188,33 @@ public class TestExportGeneration {
         final CountDownLatch promoted = new CountDownLatch(1);
         // Promote the data source to be master first, otherwise it won't send acks.
         m_exportGeneration.getDataSourceByPartition().get(m_part).get(m_tableSignature).setOnMastership(promoted::countDown, false);
-        m_exportGeneration.acceptMastershipTask(m_part);
+        m_exportGeneration.acceptMastership(m_part);
         promoted.await(5, TimeUnit.SECONDS);
 
         int retries = 4000;
-        long uso = 0L;
+        long seqNo = 1L;
         boolean active = false;
 
         while( --retries >= 0 && ! active) {
             m_exportGeneration.pushExportBuffer(
                     m_part,
                     m_tableSignature,
-                    uso,
+                    seqNo,
+                    1,
+                    0L,
                     foo.duplicate(),
                     false
                     );
             AckingContainer cont = (AckingContainer)m_expDs.poll().get();
+            cont.updateStartTime(System.currentTimeMillis());
 
-            m_ackMatcherRef.set(ackMbxMessageIs(m_part, m_tableSignature, uso + foo.capacity() - StreamBlock.HEADER_SIZE - 1));
+            m_ackMatcherRef.set(ackMbxMessageIs(m_part, m_tableSignature, seqNo));
             m_mbxNotifyCdlRef.set( new CountDownLatch(1));
 
             cont.discard();
 
             active = m_mbxNotifyCdlRef.get().await(2, TimeUnit.MILLISECONDS);
-            uso += foo.capacity() - StreamBlock.HEADER_SIZE;
+            seqNo++;
         }
         assertTrue( "timeout on ack message receipt", retries >= 0);
     }
@@ -225,7 +229,9 @@ public class TestExportGeneration {
         m_exportGeneration.pushExportBuffer(
                 m_part,
                 m_tableSignature,
-                /*uso*/0,
+                /*seqNo*/1L,
+                1,
+                0L,
                 foo.duplicate(),
                 false
                 );
@@ -248,7 +254,7 @@ public class TestExportGeneration {
 
         m_mbox.send(
                 hsid,
-                new AckPayloadMessage(m_part, m_tableSignature, foo.capacity()).asVoltMessage()
+                new AckPayloadMessage(m_part, m_tableSignature, 1L).asVoltMessage()
                 );
 
         while( --retries >= 0 && size == m_expDs.sizeInBytes()) {

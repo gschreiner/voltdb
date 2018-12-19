@@ -52,7 +52,9 @@ TupleStreamBase::TupleStreamBase(size_t defaultBufferSize, size_t extraHeaderSpa
       m_openTransactionUso(0),
       m_committedSpHandle(0), m_committedUso(0),
       m_committedUniqueId(0),
-      m_headerSpace(MAGIC_HEADER_SPACE_FOR_JAVA + extraHeaderSpace)
+      m_headerSpace(MAGIC_HEADER_SPACE_FOR_JAVA + extraHeaderSpace),
+      m_uncommittedTupleCount(0),
+      m_exportSequenceNumber(1) // sequence number starts from 1
 {
     extendBufferChain(m_defaultCapacity);
 }
@@ -113,6 +115,9 @@ void TupleStreamBase::commit(int64_t lastCommittedSpHandle, int64_t currentSpHan
                 "Received a new transaction, but with the same spHandle (%jd): old uniqueId is %jd, new uniqueId is %jd",
                 (intmax_t)m_openSpHandle, (intmax_t)m_openUniqueId, (intmax_t)uniqueId);
     }
+
+    m_currBlock->updateRowCountForExport(m_uncommittedTupleCount);
+    m_uncommittedTupleCount = 0;
 
     // more data for an ongoing transaction with no new committed data
     if ((currentSpHandle == m_openSpHandle) &&
@@ -205,7 +210,7 @@ void TupleStreamBase::pushPendingBlocks()
 /*
  * Discard all data with a uso gte mark
  */
-void TupleStreamBase::rollbackTo(size_t mark, size_t)
+void TupleStreamBase::rollbackTo(size_t mark, size_t, int64_t exportSeqNo)
 {
     if (mark > m_uso) {
         throwFatalException("Truncating the future: mark %jd, current USO %jd.",
@@ -217,6 +222,9 @@ void TupleStreamBase::rollbackTo(size_t mark, size_t)
 
     // back up the universal stream counter
     m_uso = mark;
+    // make the stream of tuples contiguous outside of actual system failures
+    m_uncommittedTupleCount -= m_exportSequenceNumber - exportSeqNo;
+    m_exportSequenceNumber = exportSeqNo;
 
     // working from newest to oldest block, throw
     // away blocks that are fully after mark; truncate
@@ -303,6 +311,8 @@ void TupleStreamBase::extendBufferChain(size_t minLength)
     if (blockSize > m_defaultCapacity) {
         m_currBlock->setType(LARGE_STREAM_BLOCK);
     }
+
+    m_currBlock->recordStartExportSequenceNumber(m_exportSequenceNumber);
 
     if (openTransaction) {
         handleOpenTransaction(oldBlock);

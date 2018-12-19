@@ -81,7 +81,7 @@ public class MockVoltDB implements VoltDBInterface
     final String m_clusterName = "cluster";
     final String m_databaseName = "database";
     StatsAgent m_statsAgent = null;
-    HostMessenger m_hostMessenger = new HostMessenger(new HostMessenger.Config(false), null, null);
+    HostMessenger m_hostMessenger = new HostMessenger(new HostMessenger.Config(false), null);
     private OperationMode m_mode = OperationMode.RUNNING;
     private volatile String m_localMetadata;
     final SnapshotCompletionMonitor m_snapshotCompletionMonitor = new SnapshotCompletionMonitor();
@@ -123,6 +123,8 @@ public class MockVoltDB implements VoltDBInterface
             obj.put("httpPort", httpPort);
             obj.put("drPort", drPort);
             obj.put("drInterface", "127.0.0.1");
+            obj.put(VoltZK.drPublicHostProp, "");
+            obj.put(VoltZK.drPublicPortProp, Integer.toString(VoltDB.DISABLED_PORT));
 
             m_localMetadata = obj.toString(4);
 
@@ -852,7 +854,7 @@ public class MockVoltDB implements VoltDBInterface
     }
 
     @Override
-    public Cartographer getCartograhper() {
+    public Cartographer getCartographer() {
         return null;
     }
 
@@ -888,4 +890,7 @@ public class MockVoltDB implements VoltDBInterface
     public void setKFactor(int kfactor) {
         m_kfactor = kfactor;
     }
+
+    @Override
+    public boolean isJoining() {return false;}
 }

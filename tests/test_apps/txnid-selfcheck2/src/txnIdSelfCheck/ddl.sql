@@ -97,7 +97,7 @@ CREATE TABLE adhocr
 , jmp        bigint             NOT NULL
 , CONSTRAINT PK_id_ar PRIMARY KEY (id)
 );
-CREATE INDEX R_TSINDEX ON adhocr (ts DESC);
+CREATE INDEX R_TSINDEX ON adhocr (ts);
 
 -- partitioned table
 CREATE TABLE adhocp
@@ -109,7 +109,7 @@ CREATE TABLE adhocp
 , CONSTRAINT PK_id_ap PRIMARY KEY (id)
 );
 PARTITION TABLE adhocp ON COLUMN id;
-CREATE INDEX P_TSINDEX ON adhocp (ts DESC);
+CREATE INDEX P_TSINDEX ON adhocp (ts);
 
 -- replicated table
 CREATE TABLE bigr
@@ -129,6 +129,29 @@ CREATE TABLE bigp
 , CONSTRAINT PK_id_bp PRIMARY KEY (p,id)
 );
 PARTITION TABLE bigp ON COLUMN p;
+
+--  nibble delete replicated table
+CREATE TABLE nibdr
+(
+  p          bigint             NOT NULL
+, id         bigint             NOT NULL
+, ts         timestamp          DEFAULT NOW NOT NULL
+, value      varbinary(1048576) NOT NULL
+, CONSTRAINT PK_id_nr PRIMARY KEY (p,id)
+) USING TTL 30 Seconds on column ts ;
+CREATE INDEX NIBR_TSINDEX ON nibdr (ts);
+
+-- nibble delete partitioned table
+CREATE TABLE nibdp
+(
+  p          bigint             NOT NULL
+, id         bigint             NOT NULL
+, ts         timestamp          DEFAULT NOW NOT NULL
+, value      varbinary(1048576) NOT NULL
+, CONSTRAINT PK_id_np PRIMARY KEY (p,id)
+) USING TTL 30 Seconds on column ts ;
+PARTITION TABLE nibdp ON COLUMN p;
+CREATE INDEX NIBP_TSINDEX ON nibdp (ts);
 
 CREATE TABLE forDroppedProcedure
 (
@@ -444,12 +467,8 @@ CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.DeleteOnlyLoadTableMP;
 CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.TRUPTableInsert;
 PARTITION PROCEDURE TRUPTableInsert ON TABLE trup COLUMN p;
 CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.TRURTableInsert;
-CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.TRUPTruncateTableSP;
-PARTITION PROCEDURE TRUPTruncateTableSP ON TABLE trup COLUMN p;
 CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.TRUPTruncateTableMP;
 CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.TRURTruncateTable;
-CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.TRUPSwapTablesSP;
-PARTITION PROCEDURE TRUPSwapTablesSP ON TABLE trup COLUMN p;
 CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.TRUPSwapTablesMP;
 CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.TRURSwapTables;
 CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.TRUPScanAggTableSP;
@@ -465,9 +484,15 @@ CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.ImportInsertP;
 PARTITION PROCEDURE ImportInsertP ON TABLE importp COLUMN cid PARAMETER 3;
 PARTITION PROCEDURE ImportInsertP ON TABLE importbp COLUMN cid PARAMETER 3;
 CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.ImportInsertR;
+CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.exceptionUDF;
+CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.NIBDPTableInsert;
+PARTITION PROCEDURE NIBDPTableInsert ON TABLE nibdp COLUMN p;
+CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.NIBDRTableInsert;
+
+-- functions
 CREATE FUNCTION add2Bigint    FROM METHOD txnIdSelfCheck.procedures.udfs.add2Bigint;
 CREATE FUNCTION identityVarbin    FROM METHOD txnIdSelfCheck.procedures.udfs.identityVarbin;
-CREATE PROCEDURE FROM CLASS txnIdSelfCheck.procedures.exceptionUDF;
 CREATE FUNCTION excUDF    FROM METHOD txnIdSelfCheck.procedures.udfs.badUDF;
+
 
 END_OF_BATCH

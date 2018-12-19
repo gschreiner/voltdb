@@ -116,6 +116,7 @@ function debug() {
     echo "MIDDLE_ARGS    :" $MIDDLE_ARGS
     echo "LAST_ARGS      :" $LAST_ARGS
     echo "ARGS           :" $ARGS
+    echo "TEST_ARGS      :" $TEST_ARGS
 }
 
 # Create the Jar file used by the GEB tests of the VMC
@@ -124,10 +125,15 @@ function jars() {
     echo -e "\n$0 performing: jars"
 
     # Build the jar file for the GEB tests of the VMC
-    jar cvf fullddlfeatures.jar \
-        -C $VOLTDB_COM_DIR/obj/release/testprocs org/voltdb_testprocs/fullddlfeatures/testCreateProcFromClassProc.class \
-        -C $VOLTDB_COM_DIR/obj/release/testfuncs org/voltdb_testfuncs/BasicTestUDFSuite.class
+    JARS_HOME_DIR=$(pwd)
+    cd ${VOLTDB_COM_DIR}/obj/release/testprocs/
+    ls org/voltdb_testprocs/fullddlfeatures/*.class > classes.list
+    jar cvf ${JARS_HOME_DIR}/fullddlfeatures.jar \
+        -C ${VOLTDB_COM_DIR}/obj/release/testfuncs org/voltdb_testfuncs/BasicTestUDFSuite.class \
+        @classes.list
     code[2]=$?
+    rm -f classes.list
+    cd -
 }
 
 # Create the Jar file, only if not created already
@@ -149,6 +155,10 @@ function server-pro() {
     find-directories-if-needed
     echo -e "\n$0 performing: server-pro"
     DEPLOYMENT_FILE=$GEB_VMC_DIR/deploy_pro.xml
+    TEST_ARGS=" -Pdr=true"
+    # TODO: uncomment the line below, and delete the one above
+    # (& this comment), once ENG-14518 is fixed
+    #TEST_ARGS=" -Pdr=true -Pimporter=true"
     test-tools-server-pro
     code[3]=${code_tt_server}
 }
@@ -212,10 +222,10 @@ function prepare-pro() {
 # 'prepare-pro' (or the equivalent) has already been run
 function tests-only() {
     init-if-needed
-    echo -e "\n$0 performing: tests[-only]$ARGS"
+    echo -e "\n$0 performing: tests[-only]${TEST_ARGS}${ARGS}"
 
     cd $GEB_VMC_DIR
-    TEST_COMMAND="./gradlew$ARGS"
+    TEST_COMMAND="./gradlew${TEST_ARGS}${ARGS}"
     echo -e "running:\n$TEST_COMMAND"
     $TEST_COMMAND
     code[5]=$?
@@ -253,7 +263,7 @@ function all() {
 # everything you need to prepare for them; provides a "fresh start", i.e.,
 # re-builds the latest versions of VoltDB ('pro'), the Jar file, etc.
 function all-pro() {
-    echo -e "\n$0 performing: all$ARGS"
+    echo -e "\n$0 performing: all-pro$ARGS"
     prepare-pro
     tests
     shutdown
@@ -372,12 +382,18 @@ while [[ -n "$1" ]]; do
         while [[ -n "$2" ]] && [[ "$2" != "shutdown" ]] && [[ "$2" != "debug" ]]; do
             if [[ "$2" == -P* ]]; then
                 FIRST_ARGS="${FIRST_ARGS} $2"
-            elif [[ "$2" == "--debug" ]] || [[ "$2" == "-debug" ]]; then
-                # "--debug" is short for "-PdebugPrint=true"
-                FIRST_ARGS="${FIRST_ARGS} -PdebugPrint=true"
             elif [[ "$2" == "--basic" ]] || [[ "$2" == "-basic" ]]; then
                 # "--basic" is short for "--tests=*BasicTest*"
                 LAST_ARGS="${LAST_ARGS} --tests=*BasicTest*"
+            elif [[ "$2" == "--debug" ]] || [[ "$2" == "-debug" ]]; then
+                # "--debug" is short for "-PdebugPrint=true"
+                FIRST_ARGS="${FIRST_ARGS} -PdebugPrint=true"
+            elif [[ "$2" == "--dr" ]] || [[ "$2" == "-dr" ]]; then
+                # "--dr" is short for "-Pdr=true"
+                FIRST_ARGS="${FIRST_ARGS} -Pdr=true"
+            elif [[ "$2" == "--importer" ]] || [[ "$2" == "-importer" ]]; then
+                # "--importer" is short for "-Pimporter=true"
+                FIRST_ARGS="${FIRST_ARGS} -Pimporter=true"
             elif [[ "$2" == --* ]]; then
                 LAST_ARGS="${LAST_ARGS} $2"
                 if [[ "$item" == "--rerun-tasks" ]]; then

@@ -18,6 +18,7 @@
 package org.voltdb.compiler;
 
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 import org.hsqldb_voltpatches.HSQLInterface;
 import org.hsqldb_voltpatches.HSQLInterface.HSQLParseException;
@@ -55,10 +56,18 @@ public class PlannerTool {
     private byte[] m_catalogHash;
     private AdHocCompilerCache m_cache;
     private long m_adHocLargeFallbackCount = 0;
+    private long m_adHocLargeModeCount = 0;
 
     private final HSQLInterface m_hsql;
 
     private static PlannerStatsCollector m_plannerStats;
+
+    // If -Dlarge_mode_ratio=xx is specified via ant, the value will show up in the environment variables and
+    // take higher priority. Otherwise, the value specified via VOLTDB_OPTS will take effect.
+    // If the test is started by ant and -Dlarge_mode_ratio is not set, it will take a default value "-1" which
+    // we should ignore.
+    private final double m_largeModeRatio = Double.valueOf((System.getenv("LARGE_MODE_RATIO") == null ||
+            System.getenv("LARGE_MODE_RATIO").equals("-1")) ? System.getProperty("LARGE_MODE_RATIO", "0") : System.getenv("LARGE_MODE_RATIO"));
 
     public PlannerTool(final Database database, byte[] catalogHash)
     {
@@ -119,6 +128,10 @@ public class PlannerTool {
         return m_adHocLargeFallbackCount;
     }
 
+    public long getAdHocLargeModeCount() {
+        return m_adHocLargeModeCount;
+    }
+
     public AdHocPlannedStatement planSqlForTest(String sqlIn) {
         StatementPartitioning infer = StatementPartitioning.inferPartitioning();
         return planSql(sqlIn, infer, false, null, false, false);
@@ -158,7 +171,10 @@ public class PlannerTool {
                 logException(e, "Error compiling query");
                 loggedMsg = " (Stack trace has been written to the log.)";
             }
-            throw new RuntimeException("Error compiling query: " + e.toString() + loggedMsg, e);
+            if (e.getMessage() != null) {
+                throw new RuntimeException("SQL error while compiling query: " + e.getMessage() + loggedMsg, e);
+            }
+            throw new RuntimeException("SQL error while compiling query: " + e.toString() + loggedMsg, e);
         }
 
         if (plan == null) {
@@ -168,9 +184,16 @@ public class PlannerTool {
         return plan;
     }
 
-    public synchronized AdHocPlannedStatement planSql(String sqlIn, StatementPartitioning partitioning,
+    public synchronized AdHocPlannedStatement planSql(String sql, StatementPartitioning partitioning,
             boolean isExplainMode, final Object[] userParams, boolean isSwapTables, boolean isLargeQuery) {
-
+        // large_mode_ratio will force execution of SQL queries to use the "large" path (for read-only queries)
+        // a certain percentage of the time
+        if (m_largeModeRatio > 0 && !isLargeQuery) {
+            if (m_largeModeRatio >= 1 || m_largeModeRatio > ThreadLocalRandom.current().nextDouble()) {
+                isLargeQuery = true;
+                m_adHocLargeModeCount++;
+            }
+        }
         CacheUse cacheUse = CacheUse.FAIL;
         if (m_plannerStats != null) {
             m_plannerStats.startStatsCollection();
@@ -178,11 +201,9 @@ public class PlannerTool {
         boolean hasUserQuestionMark = false;
         boolean wrongNumberParameters = false;
         try {
-            if ((sqlIn == null) || (sqlIn.length() == 0)) {
+            if ((sql == null) || (sql = sql.trim()).isEmpty()) {    // remove any spaces or newlines
                 throw new RuntimeException("Can't plan empty or null SQL.");
             }
-            // remove any spaces or newlines
-            String sql = sqlIn.trim();
 
             // No caching for forced single partition or forced multi partition SQL,
             // since these options potentially get different plans that may be invalid
@@ -197,7 +218,7 @@ public class PlannerTool {
             // point it seems worthwhile to cache such plans, we can explore it.
             if (partitioning.isInferred() && !isLargeQuery) {
                 // Check the literal cache for a match.
-                AdHocPlannedStatement cachedPlan = m_cache.getWithSQL(sqlIn);
+                AdHocPlannedStatement cachedPlan = m_cache.getWithSQL(sql);
                 if (cachedPlan != null) {
                     cacheUse = CacheUse.HIT1;
                     return cachedPlan;
@@ -245,6 +266,11 @@ public class PlannerTool {
                 // check the parameters count
                 // check user input question marks with input parameters
                 int inputParamsLengh = userParams == null ? 0: userParams.length;
+                if (planner.getAdhocUserParamsCount() > CompiledPlan.MAX_PARAM_COUNT) {
+                    throw new PlanningErrorException(
+                            "The statement's parameter count " + planner.getAdhocUserParamsCount() +
+                            " must not exceed the maximum " + CompiledPlan.MAX_PARAM_COUNT);
+                }
                 if (planner.getAdhocUserParamsCount() != inputParamsLengh) {
                     wrongNumberParameters = true;
                     if (!isExplainMode) {
@@ -318,8 +344,10 @@ public class PlannerTool {
                     logException(e, "Error compiling query");
                     loggedMsg = " (Stack trace has been written to the log.)";
                 }
-                throw new RuntimeException("Error compiling query: " + e.toString() + loggedMsg,
-                                           e);
+                if (e.getMessage() != null) {
+                    throw new RuntimeException("SQL error while compiling query: " + e.getMessage() + loggedMsg, e);
+                }
+                throw new RuntimeException("SQL error while compiling query: " + e.toString() + loggedMsg, e);
             }
 
             //////////////////////
@@ -342,7 +370,7 @@ public class PlannerTool {
 
                 assert(parsedToken != null);
                 // Again, plans with inferred partitioning are the only ones supported in the cache.
-                m_cache.put(sqlIn, parsedToken, ahps, extractedLiterals, hasUserQuestionMark, planHasExceptionsWhenParameterized);
+                m_cache.put(sql, parsedToken, ahps, extractedLiterals, hasUserQuestionMark, planHasExceptionsWhenParameterized);
             }
             return ahps;
         }

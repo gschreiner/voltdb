@@ -531,6 +531,9 @@ string expressionToString(ExpressionType type)
     case EXPRESSION_TYPE_COMPARE_LIKE: {
         return "COMPARE_LIKE";
     }
+    case EXPRESSION_TYPE_COMPARE_STARTSWITH: {
+        return "COMPARE_STARTSWITH";
+    }
     case EXPRESSION_TYPE_COMPARE_IN: {
         return "COMPARE_IN";
     }
@@ -581,6 +584,9 @@ string expressionToString(ExpressionType type)
     }
     case EXPRESSION_TYPE_AGGREGATE_WINDOWED_DENSE_RANK: {
         return "EXPRESSION_TYPE_AGGREGATE_WINDOWED_RANK";
+    }
+    case EXPRESSION_TYPE_AGGREGATE_WINDOWED_ROW_NUMBER: {
+        return "EXPRESSION_TYPE_AGGREGATE_WINDOWED_ROW_NUMBER";
     }
     case EXPRESSION_TYPE_AGGREGATE_WINDOWED_COUNT: {
         return "EXPRESSION_TYPE_AGGREGATE_WINDOWED_COUNT";
@@ -671,6 +677,8 @@ ExpressionType stringToExpression(string str )
         return EXPRESSION_TYPE_COMPARE_GREATERTHANOREQUALTO;
     } else if (str == "COMPARE_LIKE") {
         return EXPRESSION_TYPE_COMPARE_LIKE;
+    } else if (str == "COMPARE_STARTSWITH") {
+        return EXPRESSION_TYPE_COMPARE_STARTSWITH;
     } else if (str == "COMPARE_IN") {
         return EXPRESSION_TYPE_COMPARE_IN;
     } else if (str == "COMPARE_NOTDISTINCT") {
@@ -705,6 +713,8 @@ ExpressionType stringToExpression(string str )
         return EXPRESSION_TYPE_AGGREGATE_WINDOWED_RANK;
     } else if (str == "AGGREGATE_WINDOWED_DENSE_RANK") {
         return EXPRESSION_TYPE_AGGREGATE_WINDOWED_DENSE_RANK;
+    } else if (str == "AGGREGATE_WINDOWED_ROW_NUMBER") {
+        return EXPRESSION_TYPE_AGGREGATE_WINDOWED_ROW_NUMBER;
     } else if (str == "AGGREGATE_WINDOWED_COUNT") {
         return EXPRESSION_TYPE_AGGREGATE_WINDOWED_COUNT;
     } else if (str == "AGGREGATE_WINDOWED_MAX") {

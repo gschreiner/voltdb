@@ -21,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Future;
 
+import javax.annotation_voltpatches.Nullable;
+
 import org.voltcore.utils.Pair;
 import org.voltdb.DRConsumerDrIdTracker.DRSiteDrIdTracker;
 import org.voltdb.VoltProcedure.VoltAbortException;
@@ -32,7 +34,7 @@ import org.voltdb.exceptions.EEException;
 import org.voltdb.iv2.DeterminismHash;
 import org.voltdb.iv2.JoinProducerBase;
 import org.voltdb.messaging.FastDeserializer;
-import org.voltdb.sysprocs.LowImpactDelete.ComparisonOperation;
+import org.voltdb.sysprocs.LowImpactDeleteNT.ComparisonOperation;
 
 /**
  * VoltProcedures invoke SiteProcedureConnection methods to
@@ -141,10 +143,18 @@ public interface SiteProcedureConnection {
     public void setBatch(int batchIndex);
 
     /**
-     * Let the EE know what the name of the currently executing procedure is
-     * so it can include this information in any slow query progress log messages.
+     * Let the EE know what the name of the currently executing procedure is so it can include this information in any
+     * slow query progress log messages.
+     *
+     * @param procedureName Name of the procedure which is about to be run.
      */
-    public void setProcedureName(String procedureName);
+    public void setupProcedure(@Nullable String procedureName);
+
+    /**
+     * Let the EE know that the currently executing procedure has completed. Should be called by all callers of
+     * {@link #setupProcedure(String)}
+     */
+    public void completeProcedure();
 
     public void setBatchTimeout(int batchTimeout);
     public int getBatchTimeout();
@@ -163,7 +173,7 @@ public interface SiteProcedureConnection {
     /**
      * IV2 commit / rollback interface to the EE and java level roll back if needed
      */
-    public void truncateUndoLog(boolean rollback, long token, long spHandle, List<UndoAction> undoActions);
+    public void truncateUndoLog(boolean rollback, boolean isEmptyDRTxn, long token, long spHandle, List<UndoAction> undoActions);
 
     /**
      * IV2: send dependencies to the EE
@@ -233,8 +243,13 @@ public interface SiteProcedureConnection {
 
     public TheHashinator getCurrentHashinator();
     public void updateHashinator(TheHashinator hashinator);
+    public void setViewsEnabled(String viewNames, boolean enabled);
     public long[] validatePartitioning(long tableIds[], byte hashinatorConfig[]);
-    public long applyBinaryLog(long txnId, long spHandle, long uniqueId, int remoteClusterId, int remotePartitionId, byte logData[]);
+    public void notifyOfSnapshotNonce(String nonce, long snapshotSpHandle);
+
+    public long applyBinaryLog(long txnId, long spHandle, long uniqueId, int remoteClusterId, byte logData[]);
+
+    public long applyMpBinaryLog(long txnId, long spHandle, long uniqueId, int remoteClusterId, byte logsData[]);
     public void setDRProtocolVersion(int drVersion);
     /*
      * Starting in DR version 7.0, we also generate a special event indicating the beginning of

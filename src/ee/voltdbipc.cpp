@@ -72,7 +72,7 @@ public:
         kErrorCode_DependencyNotFound = 102,           // Also response to 100
         kErrorCode_pushExportBuffer = 103,             // Indication that export buffer is next
         kErrorCode_CrashVoltDB = 104,                  // Crash with reason string
-        kErrorCode_getQueuedExportBytes = 105,         // Retrieve value for stats
+        //kErrorCode_getQueuedExportBytes = 105,         // Retrieve value for stats (DEPRECATED)
         kErrorCode_pushPerFragmentStatsBuffer = 106,   // Indication that per-fragment statistics buffer is next
         kErrorCode_callJavaUserDefinedFunction = 107,  // Notify the frontend to call a Java user-defined function.
         kErrorCode_needPlan = 110,                     // fetch a plan from java for a fragment
@@ -208,6 +208,8 @@ private:
 
     int callJavaUserDefinedFunction();
 
+    void setViewsEnabled(struct ipc_command*);
+
     // We do not adjust the UDF buffer size in the IPC mode.
     // The buffer sizes are always MAX_MSG_SZ (10M)
     void resizeUDFBuffer(int32_t size) {
@@ -299,6 +301,7 @@ typedef struct {
 struct undo_token {
     struct ipc_command cmd;
     int64_t token;
+    char isEmptyDRTxn;
 }__attribute__((packed));
 
 /*
@@ -394,6 +397,12 @@ typedef struct {
     int32_t isStreamChange;
     char data[0];
 }__attribute__((packed)) update_catalog_cmd;
+
+typedef struct {
+    struct ipc_command cmd;
+    char enabled;
+    char viewNameBytes[0];
+}__attribute__((packed)) set_views_enabled;
 
 using namespace voltdb;
 
@@ -554,6 +563,10 @@ bool VoltDBIPC::execute(struct ipc_command *cmd) {
           break;
       case 30:
           result = shutDown();
+          break;
+      case 31:
+          setViewsEnabled(cmd);
+          result = kErrorCode_None;
           break;
       default:
         result = stub(cmd);
@@ -731,9 +744,10 @@ int8_t VoltDBIPC::releaseUndoToken(struct ipc_command *cmd) {
 
 
     struct undo_token * cs = (struct undo_token*) cmd;
+    bool isEmptyDRTxn = cs->isEmptyDRTxn > 0;
 
     try {
-        m_engine->releaseUndoToken(ntohll(cs->token));
+        m_engine->releaseUndoToken(ntohll(cs->token), isEmptyDRTxn);
     } catch (const FatalException &e) {
         crashVoltDB(e);
     }
@@ -876,6 +890,12 @@ void VoltDBIPC::executePlanFragments(struct ipc_command *cmd) {
     } else {
         sendException(kErrorCode_Error);
     }
+}
+
+void VoltDBIPC::setViewsEnabled(struct ipc_command *cmd) {
+    set_views_enabled* setViewsEnabledCommand = (set_views_enabled*) cmd;
+    bool enabled = setViewsEnabledCommand->enabled > 0;
+    m_engine->setViewsEnabled(std::string(setViewsEnabledCommand->viewNameBytes), enabled);
 }
 
 void VoltDBIPC::sendPerFragmentStatsBuffer() {
@@ -1582,20 +1602,6 @@ void VoltDBIPC::threadLocalPoolAllocations() {
     writeOrDie(m_fd, (unsigned char*)response, 9);
 }
 
-int64_t VoltDBIPC::getQueuedExportBytes(int32_t partitionId, std::string signature) {
-    m_reusedResultBuffer[0] = kErrorCode_getQueuedExportBytes;
-    *reinterpret_cast<int32_t*>(&m_reusedResultBuffer[1]) = htonl(partitionId);
-    *reinterpret_cast<int32_t*>(&m_reusedResultBuffer[5]) = htonl(static_cast<int32_t>(signature.size()));
-    ::memcpy( &m_reusedResultBuffer[9], signature.c_str(), signature.size());
-    writeOrDie(m_fd, (unsigned char*)m_reusedResultBuffer, 9 + signature.size());
-
-    int64_t netval;
-    ssize_t bytes = read(m_fd, &netval, sizeof(int64_t));
-    checkBytesRead(sizeof(int64_t), bytes, "queued export byte count");
-    int64_t retval = ntohll(netval);
-    return retval;
-}
-
 void VoltDBIPC::pushExportBuffer(
         int32_t partitionId,
         std::string signature,
@@ -1610,11 +1616,15 @@ void VoltDBIPC::pushExportBuffer(
     ::memcpy( &m_reusedResultBuffer[index], signature.c_str(), signature.size());
     index += static_cast<int32_t>(signature.size());
     if (block != NULL) {
-        *reinterpret_cast<int64_t*>(&m_reusedResultBuffer[index]) = htonll(block->uso());
+        *reinterpret_cast<int64_t*>(&m_reusedResultBuffer[index]) = htonll(block->startExportSequenceNumber());
+        *reinterpret_cast<int64_t*>(&m_reusedResultBuffer[index+8]) = htonll(block->getRowCountforExport());
+        *reinterpret_cast<int64_t*>(&m_reusedResultBuffer[index+16]) = htonll(block->lastSpUniqueId());
     } else {
         *reinterpret_cast<int64_t*>(&m_reusedResultBuffer[index]) = 0;
+        *reinterpret_cast<int64_t*>(&m_reusedResultBuffer[index+8]) = 0;
+        *reinterpret_cast<int64_t*>(&m_reusedResultBuffer[index+16]) = 0;
     }
-    index += 8;
+    index += 24;
     *reinterpret_cast<int8_t*>(&m_reusedResultBuffer[index++]) =
         sync ?
             static_cast<int8_t>(1) : static_cast<int8_t>(0);
@@ -1672,7 +1682,6 @@ void VoltDBIPC::applyBinaryLog(struct ipc_command *cmd) {
                                         ntohll(params->lastCommittedSpHandle),
                                         ntohll(params->uniqueId),
                                         ntohl(params->remoteClusterId),
-                                        ntohl(params->remotePartitionId),
                                         ntohll(params->undoToken),
                                         params->log);
         char response[9];
@@ -1684,7 +1693,7 @@ void VoltDBIPC::applyBinaryLog(struct ipc_command *cmd) {
     }
 }
 
-int64_t VoltDBIPC::pushDRBuffer(int32_t partitionId, voltdb::StreamBlock *block) {
+int64_t VoltDBIPC::pushDRBuffer(int32_t partitionId, StreamBlock *block) {
     if (block != NULL) {
         delete []block->rawPtr();
     }

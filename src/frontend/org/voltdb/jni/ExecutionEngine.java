@@ -608,8 +608,7 @@ public abstract class ExecutionEngine implements FastDeserializer.Deserializatio
     /** Pass the catalog to the engine */
     public void loadCatalog(long timestamp, String serializedCatalog) {
         try {
-            m_startTime = 0;
-            m_logDuration = INITIAL_LOG_DURATION;
+            setupProcedure(null);
             m_fragmentContext = FragmentContext.CATALOG_LOAD;
             coreLoadCatalog(timestamp, getStringBytes(serializedCatalog));
         }
@@ -623,8 +622,7 @@ public abstract class ExecutionEngine implements FastDeserializer.Deserializatio
     /** Pass diffs to apply to the EE's catalog to update it */
     public final void updateCatalog(final long timestamp, final boolean isStreamUpdate, final String diffCommands) throws EEException {
         try {
-            m_startTime = 0;
-            m_logDuration = INITIAL_LOG_DURATION;
+            setupProcedure(null);
             m_fragmentContext = FragmentContext.CATALOG_UPDATE;
             coreUpdateCatalog(timestamp, isStreamUpdate, diffCommands);
         }
@@ -639,8 +637,14 @@ public abstract class ExecutionEngine implements FastDeserializer.Deserializatio
         m_currentBatchIndex = batchIndex;
     }
 
-    public void setProcedureName(String procedureName) {
+    public void setupProcedure(String procedureName) {
         m_currentProcedureName = procedureName;
+        m_startTime = 0;
+        m_logDuration = INITIAL_LOG_DURATION;
+    }
+
+    public void completeProcedure() {
+        m_currentProcedureName = null;
     }
 
     /** Run multiple plan fragments */
@@ -665,8 +669,6 @@ public abstract class ExecutionEngine implements FastDeserializer.Deserializatio
             m_fragmentContext = (undoQuantumToken == Long.MAX_VALUE) ? FragmentContext.RO_BATCH : FragmentContext.RW_BATCH;
 
             // reset context for progress updates
-            m_startTime = 0;
-            m_logDuration = INITIAL_LOG_DURATION;
             m_sqlTexts = sqlTexts;
 
             if (traceOn) {
@@ -780,7 +782,7 @@ public abstract class ExecutionEngine implements FastDeserializer.Deserializatio
      * Release all undo actions up to and including the specified undo token
      * @param undoToken The undo token.
      */
-    public abstract boolean releaseUndoToken(long undoToken);
+    public abstract boolean releaseUndoToken(long undoToken, boolean isEmptyDRTxn);
 
     /**
      * Undo all undo actions back to and including the specified undo token
@@ -830,24 +832,17 @@ public abstract class ExecutionEngine implements FastDeserializer.Deserializatio
      * Apply binary log data. To be able to advance the DR sequence number and
      * regenerate binary log for chaining correctly, proper spHandle and
      * lastCommittedSpHandle from the current transaction need to be passed in.
-     * @param log                      The binary log data
+     * @param logs                     The binary log data
      * @param txnId                    The txnId of the current transaction
      * @param spHandle                 The spHandle of the current transaction
      * @param lastCommittedSpHandle    The spHandle of the last committed transaction
      * @param uniqueId                 The uniqueId of the current transaction
      * @param remoteClusterId          The cluster id of producer cluster
-     * @param remotePartitionId        The partition id of producer cluster
      * @param undoToken                For undo
      * @throws EEException
      */
-    public abstract long applyBinaryLog(ByteBuffer log,
-                                        long txnId,
-                                        long spHandle,
-                                        long lastCommittedSpHandle,
-                                        long uniqueId,
-                                        int remoteClusterId,
-                                        int remotePartitionId,
-                                        long undoToken) throws EEException;
+    public abstract long applyBinaryLog(ByteBuffer logs, long txnId, long spHandle, long lastCommittedSpHandle,
+            long uniqueId, int remoteClusterId, long undoToken) throws EEException;
 
     /**
      * Execute an arbitrary non-transactional task that is described by the task id and
@@ -863,6 +858,11 @@ public abstract class ExecutionEngine implements FastDeserializer.Deserializatio
     public abstract byte[] executeTask(TaskType taskType, ByteBuffer task) throws EEException;
 
     public abstract ByteBuffer getParamBufferForExecuteTask(int requiredCapacity);
+
+    /**
+     * Pause/resume the maintenance of materialized views specified in viewNames.
+     */
+    public abstract void setViewsEnabled(String viewNames, boolean enabled);
 
     /*
      * Declare the native interface. Structurally, in Java, it would be cleaner to
@@ -910,7 +910,8 @@ public abstract class ExecutionEngine implements FastDeserializer.Deserializatio
             int defaultDrBufferSize,
             long tempTableMemory,
             boolean createDrReplicatedStream,
-            int compactionThreshold);
+            int compactionThreshold,
+            int exportFlushTimeout);
 
     /**
      * Sets (or re-sets) all the shared direct byte buffers in the EE.
@@ -1069,7 +1070,7 @@ public abstract class ExecutionEngine implements FastDeserializer.Deserializatio
      * @param undoToken The undo token to release
      * @return true for success false for failure
      */
-    protected native boolean nativeReleaseUndoToken(long pointer, long undoToken);
+    protected native boolean nativeReleaseUndoToken(long pointer, long undoToken, boolean isEmptyDRTxn);
 
     /**
      * @param undoToken The undo token to undo
@@ -1122,14 +1123,8 @@ public abstract class ExecutionEngine implements FastDeserializer.Deserializatio
      */
     protected native long nativeTableHashCode(long pointer, int tableId);
 
-    protected native long nativeApplyBinaryLog(long pointer,
-                                               long txnId,
-                                               long spHandle,
-                                               long lastCommittedSpHandle,
-                                               long uniqueId,
-                                               int remoteClusterId,
-                                               int remotePartitionId,
-                                               long undoToken);
+    protected native long nativeApplyBinaryLog(long pointer, long txnId, long spHandle, long lastCommittedSpHandle,
+            long uniqueId, int remoteClusterId, long undoToken);
 
     /**
      * Execute an arbitrary task based on the task ID and serialized task parameters.
@@ -1154,6 +1149,8 @@ public abstract class ExecutionEngine implements FastDeserializer.Deserializatio
             long mAckOffset,
             long seqNo,
             byte mTableSignature[]);
+
+    protected native void nativeSetViewsEnabled(long pointer, byte[] viewNamesAsBytes, boolean enabled);
 
     /**
      * Get the USO for an export table. This is primarily used for recovery.

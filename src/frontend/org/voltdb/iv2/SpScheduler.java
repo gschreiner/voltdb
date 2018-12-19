@@ -49,6 +49,7 @@ import org.voltdb.SnapshotCompletionInterest;
 import org.voltdb.SnapshotCompletionMonitor;
 import org.voltdb.SystemProcedureCatalog;
 import org.voltdb.VoltDB;
+import org.voltdb.VoltDBInterface;
 import org.voltdb.VoltTable;
 import org.voltdb.client.ClientResponse;
 import org.voltdb.dtxn.TransactionState;
@@ -209,6 +210,13 @@ public class SpScheduler extends Scheduler implements SnapshotCompletionInterest
     {
         super.setLeaderState(isLeader);
         m_snapMonitor.addInterest(this);
+        VoltDBInterface db = VoltDB.instance();
+        if (isLeader && db instanceof RealVoltDB ) {
+            SpInitiator init = (SpInitiator)((RealVoltDB)db).getInitiator(m_partitionId);
+            if (init.m_term != null) {
+                ((SpTerm)init.m_term).setPromoting(false);
+            }
+        }
     }
 
     @Override
@@ -304,8 +312,8 @@ public class SpScheduler extends Scheduler implements SnapshotCompletionInterest
                 m_outstandingTxns.remove(key.m_txnId);
                 // for MP write txns, we should use it's first SpHandle in the TransactionState
                 // for SP write txns, we can just use the SpHandle from the DuplicateCounterKey
-                long m_safeSpHandle = txn == null ? key.m_spHandle: txn.m_spHandle;
-                setRepairLogTruncationHandle(m_safeSpHandle, false);
+                long safeSpHandle = txn == null ? key.m_spHandle: txn.m_spHandle;
+                setRepairLogTruncationHandle(safeSpHandle, false);
             }
 
             VoltMessage resp = counter.getLastResponse();
@@ -562,7 +570,7 @@ public class SpScheduler extends Scheduler implements SnapshotCompletionInterest
             }
 
             // The leader will be responsible to replicate messages to replicas.
-            // Don't replicate reads, not matter FAST or SAFE.
+            // Don't replicate reads, no matter FAST or SAFE.
             if (m_isLeader && (!msg.isReadOnly()) && IS_KSAFE_CLUSTER ) {
                 for (long hsId : m_sendToHSIds) {
                     Iv2InitiateTaskMessage finalMsg = msg;
@@ -761,7 +769,6 @@ public class SpScheduler extends Scheduler implements SnapshotCompletionInterest
         if (!needsRepair.isEmpty()) {
             FragmentTaskMessage replmsg =
                 new FragmentTaskMessage(m_mailbox.getHSId(), m_mailbox.getHSId(), message);
-            replmsg.setForReplica(false);
             m_mailbox.send(com.google_voltpatches.common.primitives.Longs.toArray(needsRepair), replmsg);
         }
     }
@@ -1407,24 +1414,27 @@ public class SpScheduler extends Scheduler implements SnapshotCompletionInterest
     private void handleDumpMessage()
     {
         String who = CoreUtils.hsIdToString(m_mailbox.getHSId());
-        hostLog.warn("State dump for site: " + who);
-        hostLog.warn(who + ": partition: " + m_partitionId + ", isLeader: " + m_isLeader);
+        StringBuilder builder = new StringBuilder();
+        builder.append("START OF STATE DUMP FOR SITE: ").append(who);
+        builder.append("\n  partition: ").append(m_partitionId).append(", isLeader: ").append(m_isLeader);
         if (m_isLeader) {
-            hostLog.warn(who + ": replicas: " + CoreUtils.hsIdCollectionToString(m_replicaHSIds));
+            builder.append("  replicas: ").append(CoreUtils.hsIdCollectionToString(m_replicaHSIds));
             if (m_sendToHSIds.length > 0) {
                 m_mailbox.send(m_sendToHSIds, new DumpMessage());
             }
         }
-        hostLog.warn(who + ": most recent SP handle: " + TxnEgo.txnIdToString(getCurrentTxnId()));
-        hostLog.warn(who + ": outstanding txns: " + m_outstandingTxns.keySet() + " " +
-                TxnEgo.txnIdCollectionToString(m_outstandingTxns.keySet()));
-        hostLog.warn(who + ": " + m_pendingTasks.toString());
+        builder.append("\n  most recent SP handle: ").append(TxnEgo.txnIdToString(getCurrentTxnId()));
+        builder.append("\n  outstanding txns: ").append(TxnEgo.txnIdCollectionToString(m_outstandingTxns.keySet()));
+        builder.append("\n  ");
+        m_pendingTasks.toString(builder);
         if (m_duplicateCounters.size() > 0) {
-            hostLog.warn(who + ": duplicate counters: ");
+            builder.append("\n  DUPLICATE COUNTERS:\n ");
             for (Entry<DuplicateCounterKey, DuplicateCounter> e : m_duplicateCounters.entrySet()) {
-                hostLog.warn("\t" + who + ": " + e.getKey().toString() + ": " + e.getValue().toString());
+                builder.append("  ").append(e.getKey().toString()).append(": ").append(e.getValue().toString());
             }
         }
+        builder.append("END of STATE DUMP FOR SITE: ").append(who);
+        hostLog.warn(builder.toString());
     }
 
     private void handleDummyTransactionTaskMessage(DummyTransactionTaskMessage message)
@@ -1624,12 +1634,13 @@ public class SpScheduler extends Scheduler implements SnapshotCompletionInterest
     {
         if (newHandle > m_repairLogTruncationHandle) {
             m_repairLogTruncationHandle = newHandle;
+            // ENG-14553: release buffered reads regardless of leadership status
+            m_bufferedReadLog.releaseBufferedReads(m_mailbox, m_repairLogTruncationHandle);
             // We have to advance the local truncation point on the replica. It's important for
             // node promotion when there are no missing repair log transactions on the replica.
             // Because we still want to release the reads if no following writes will come to this replica.
             // Also advance the truncation point if this is not a leader but the response message is for leader.
             if (m_isLeader || isForLeader) {
-                m_bufferedReadLog.releaseBufferedReads(m_mailbox, m_repairLogTruncationHandle);
                 scheduleRepairLogTruncateMsg();
             }
         } else {
@@ -1660,7 +1671,8 @@ public class SpScheduler extends Scheduler implements SnapshotCompletionInterest
      */
     private void scheduleRepairLogTruncateMsg()
     {
-        if (m_sendToHSIds.length == 0) {
+        // skip schedule jobs if no TxnCommitInterests need to be notified
+        if (m_sendToHSIds.length == 0 && m_repairLog.hasNoTxnCommitInterests()) {
             return;
         }
 
@@ -1671,6 +1683,11 @@ public class SpScheduler extends Scheduler implements SnapshotCompletionInterest
                 synchronized (m_lock) {
                     if (m_lastSentTruncationHandle < m_repairLogTruncationHandle) {
                         m_lastSentTruncationHandle = m_repairLogTruncationHandle;
+                        m_repairLog.notifyTxnCommitInterests(m_lastSentTruncationHandle);
+                        if (m_sendToHSIds.length == 0) {
+                            return;
+                        }
+
                         final RepairLogTruncationMessage truncMsg = new RepairLogTruncationMessage(m_repairLogTruncationHandle);
                         // Also keep the local repair log's truncation point up-to-date
                         // so that it can trigger the callbacks.
@@ -1730,7 +1747,7 @@ public class SpScheduler extends Scheduler implements SnapshotCompletionInterest
     //When a partition leader is migrated from one host to a new host, the new host may fail before it gets chance
     //to allow the site to be promoted. Remove the sites on the new host from the replica list and
     //update the duplicated counters after the host failure.
-    public void updateReplicasFromMigrationLeaderFailedHost(long failedHostId) {
+    public void updateReplicasFromMigrationLeaderFailedHost(int failedHostId) {
         List<Long> replicas = new ArrayList<>();
         for (long hsid : m_replicaHSIds) {
             if (failedHostId != CoreUtils.getHostIdFromHSId(hsid)) {

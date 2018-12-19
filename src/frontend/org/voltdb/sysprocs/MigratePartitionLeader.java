@@ -62,7 +62,7 @@ public class MigratePartitionLeader extends VoltSystemProcedure {
         }
 
         RealVoltDB db = (RealVoltDB)VoltDB.instance();
-        Long targetHsid = db.getCartograhper().getHSIDForPartitionHost(hostId, partitionId);
+        Long targetHsid = db.getCartographer().getHSIDForPartitionHost(hostId, partitionId);
         if (targetHsid == null) {
             String msg = String.format("[@MigratePartitionLeader] The host %d is invalid.", hostId);
             t.addRow(VoltSystemProcedure.STATUS_FAILURE, msg);

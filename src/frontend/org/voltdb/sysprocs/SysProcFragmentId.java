@@ -228,6 +228,12 @@ public class SysProcFragmentId
     public static final long PF_enableScoreboard = 332;
     public static final long PF_enableScoreboardAggregate = 333;
 
+    // Pause/resume materialized views
+    public static final long PF_setViewEnabled = 340;
+
+    // @ExportControl
+    public static final long PF_exportControl = 350;
+    public static final long PF_exportControlAggregate = 351;
 
     public static boolean isEnableScoreboardFragment(byte[] planHash) {
         long fragId = VoltSystemProcedure.hashToFragId(planHash);

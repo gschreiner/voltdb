@@ -35,11 +35,12 @@ import org.apache.zookeeper_voltpatches.ZooKeeper;
 import org.json_voltpatches.JSONException;
 import org.json_voltpatches.JSONObject;
 import org.voltcore.logging.VoltLogger;
-import org.voltcore.utils.CoreUtils;
 import org.voltcore.utils.Pair;
 import org.voltcore.zk.CoreZK;
 import org.voltcore.zk.ZKUtil;
 import org.voltcore.zk.ZooKeeperLock;
+import org.voltdb.iv2.LeaderCache;
+import org.voltdb.iv2.LeaderCache.LeaderCallBackInfo;
 import org.voltdb.iv2.MigratePartitionLeaderInfo;
 
 /**
@@ -61,10 +62,13 @@ public class VoltZK {
     public static final String perPartitionTxnIds = "/db/perPartitionTxnIds";
     public static final String operationMode = "/db/operation_mode";
     public static final String exportGenerations = "/db/export_generations";
-    public static final String importerBase = "/db/import";
 
     // configuration (ports, interfaces, ...)
     public static final String cluster_metadata = "/db/cluster_metadata";
+
+    // localMetadata json property names
+    public static final String drPublicHostProp = "drPublicHost";
+    public static final String drPublicPortProp = "drPublicPort";
 
     /*
      * mailboxes
@@ -95,10 +99,10 @@ public class VoltZK {
     public static final String commandlog_init_barrier = "/db/commmandlog_init_barrier";
 
     // leader election
-    private static final String migrate_partition_leader_suffix = "_migrate_partition_leader_request";
 
     // root for MigratePartitionLeader information nodes
     public static final String migrate_partition_leader_info = "/core/migrate_partition_leader_info";
+    public static final String drConsumerPartitionMigration = "/db/dr_consumer_partition_migration";
 
     public static final String iv2masters = "/db/iv2masters";
     public static final String iv2appointees = "/db/iv2appointees";
@@ -130,8 +134,9 @@ public class VoltZK {
 
                 if (arr != null) {
                     String data = new String(arr, "UTF-8");
-                    if ((iv2masters.equals(dir) || iv2appointees.equals(dir)) && !isHSIdFromMigratePartitionLeaderRequest(data)) {
-                        data = CoreUtils.hsIdToString(Long.parseLong(data));
+                    if (iv2masters.equals(dir) || iv2appointees.equals(dir)) {
+                        LeaderCallBackInfo info = LeaderCache.buildLeaderCallbackFromString(data);
+                        data = info.toString();
                     }
                     isData = true;
                     builder.append(key).append(" -> ").append(data).append(",");
@@ -168,20 +173,27 @@ public class VoltZK {
     public static final String migrate_partition_leader = "migrate_partition_leader_blocker";
     public static final String migratePartitionLeaderBlocker = actionBlockers + "/" + migrate_partition_leader;
 
-    // two elastic join blockers
+    // three elastic join blockers
     // elasticJoinInProgress blocks the rejoin (create in init state, release before data migration start)
     // banElasticJoin blocks elastic join (currently created by DRProducer if the agreed protocol version
     //                                     for the mesh does not support elastic join during DR (i.e. version <= 7).
     //                                     It is now only released after a DR global reset.)
+    // elasticJoinMigration only blockers SPI Migration
     public static final String leafNodeElasticJoinInProgress = "join_blocker";
     public static final String elasticJoinInProgress = actionBlockers + "/" + leafNodeElasticJoinInProgress;
     public static final String leafNodeBanElasticJoin = "no_join_blocker";
     public static final String banElasticJoin = actionBlockers + "/" + leafNodeBanElasticJoin;
+    public static final String leafNodeElasticJoinMigration = "join_migration_blocker";
+    public static final String elasticJoinMigration = actionBlockers + "/" + leafNodeElasticJoinMigration;
 
     public static final String leafNodeRejoinInProgress = "rejoin_blocker";
     public static final String rejoinInProgress = actionBlockers + "/" + leafNodeRejoinInProgress;
     public static final String leafNodeCatalogUpdateInProgress = "uac_nt_blocker";
     public static final String catalogUpdateInProgress = actionBlockers + "/" + leafNodeCatalogUpdateInProgress;
+
+    //register partition while the partition elects a new leader upon node failure
+    public static final String mpRepairBlocker = "mp_repair_blocker";
+    public static final String mpRepairInProgress = actionBlockers + "/" + mpRepairBlocker;
 
     public static final String request_truncation_snapshot_node = ZKUtil.joinZKPath(request_truncation_snapshot, "request_");
 
@@ -207,6 +219,7 @@ public class VoltZK {
             root,
             mailboxes,
             cluster_metadata,
+            drConsumerPartitionMigration,
             operationMode,
             iv2masters,
             iv2appointees,
@@ -306,20 +319,30 @@ public class VoltZK {
         }
     }
 
-    public static Pair<String, Integer> getDRInterfaceAndPortFromMetadata(String metadata)
+    public static Pair<String, Integer> getDRPublicInterfaceAndPortFromMetadata(String metadata)
     throws IllegalArgumentException {
         try {
             JSONObject obj = new JSONObject(metadata);
-            //Pick drInterface if specified...it will be empty if none specified.
-            //we should pick then from the "interfaces" array and use 0th element.
-            String hostName = obj.getString("drInterface");
+            // Precedence order for host:port on which consumers should connect:
+            // - drPublic
+            // - drInterface
+            // - 0th element in interfaces
+            String hostName = obj.getString(drPublicHostProp);
+            if (hostName == null || hostName.isEmpty()) {
+                hostName = obj.getString("drInterface");
+            }
             if (hostName == null || hostName.length() <= 0) {
                 hostName = obj.getJSONArray("interfaces").getString(0);
             }
             assert(hostName != null);
             assert(hostName.length() > 0);
 
-            return Pair.of(hostName, obj.getInt("drPort"));
+            int port = obj.getInt(drPublicPortProp);
+            if (port == VoltDB.DISABLED_PORT) {
+                port = obj.getInt("drPort");
+            }
+
+            return Pair.of(hostName, port);
         } catch (JSONException e) {
             throw new IllegalArgumentException("Error parsing host metadata", e);
         }
@@ -438,6 +461,10 @@ public class VoltZK {
             case catalogUpdateInProgress:
                 if (blockers.contains(leafNodeRejoinInProgress)) {
                     errorMsg = "while a node rejoin is active. Please retry catalog update later.";
+                } else if (blockers.contains(mpRepairBlocker)){
+                    // Avoid UAC during MP repair or promotion since UAC will invoke GlobalServiceElector to
+                    // register other promotable services while MPI is accepting promotion
+                    errorMsg = "while leader promotion or transaction repair are in progress. Please retry catalog update later.";
                 }
                 break;
             case rejoinInProgress:
@@ -447,7 +474,12 @@ public class VoltZK {
                 } else if (blockers.contains(leafNodeElasticJoinInProgress)) {
                     errorMsg = "while an elastic join is active. Please retry node rejoin later.";
                 } else if (blockers.contains(migrate_partition_leader)){
-                    errorMsg = "while leader migratioon is active. Please retry node rejoin later.";
+                    errorMsg = "while leader migration is active. Please retry node rejoin later.";
+                } else if (blockers.contains(mpRepairBlocker)){
+                    // Upon node failures, a MP repair blocker may be registered right before they
+                    // unregistered after repair is done. Let rejoining nodes wait to avoid any
+                    // interference with the transaction repair process.
+                    errorMsg = "while leader promotion or transaction repair are in progress. Please retry node rejoin later.";
                 }
                 break;
             case elasticJoinInProgress:
@@ -465,16 +497,24 @@ public class VoltZK {
                 }
                 break;
             case migratePartitionLeaderBlocker:
-                //MigratePartitionLeader can not happen when join, rejoin, catalog update is in progress.
+                //MigratePartitionLeader can not happen when join (before data fully migrated), rejoin, catalog update, or repair is in progress.
                 blockers.remove(leafNodeBanElasticJoin);
                 if (blockers.size() > 1) {
                     errorMsg = "while elastic join, rejoin or catalog update is active";
                 }
                 break;
+            case elasticJoinMigration:
+                // elastic join balancePartition currently cannot coexist with partition leader migration
+               if (blockers.contains(migrate_partition_leader)) {
+                   errorMsg = "while leader migration is active.";
+               }
+               break;
             case banElasticJoin:
                 if (blockers.contains(leafNodeElasticJoinInProgress)) {
                     errorMsg = "while an elastic join is active";
                 }
+                break;
+            case mpRepairInProgress:
                 break;
             default:
                 // not possible
@@ -486,7 +526,7 @@ public class VoltZK {
         }
 
         if (errorMsg != null) {
-            VoltZK.removeActionBlocker(zk, node, hostLog);
+            VoltZK.removeActionBlocker(zk, node, null);
             return "Can't do " + request + " " + errorMsg;
         }
 
@@ -509,34 +549,10 @@ public class VoltZK {
         } catch (InterruptedException e) {
             return false;
         }
-        log.info("Remove action blocker " + node + " successfully.");
-        return true;
-    }
-
-    /**
-     * Generate a HSID string with BALANCE_SPI_SUFFIX information.
-     * When this string is updated, we can tell the reason why HSID is changed.
-     */
-    public static String suffixHSIdsWithMigratePartitionLeaderRequest(Long HSId) {
-        return Long.toString(HSId) + migrate_partition_leader_suffix;
-    }
-
-    /**
-     * Is the data string hsid written because of MigratePartitionLeader request?
-     */
-    public static boolean isHSIdFromMigratePartitionLeaderRequest(String hsid) {
-        return hsid.endsWith(migrate_partition_leader_suffix);
-    }
-
-    /**
-     * Given a data string, figure out what's the long HSID number. Usually the data string
-     * is read from the zookeeper node.
-     */
-    public static long getHSId(String hsid) {
-        if (isHSIdFromMigratePartitionLeaderRequest(hsid)) {
-            return Long.parseLong(hsid.substring(0, hsid.length() - migrate_partition_leader_suffix.length()));
+        if (log != null) {
+            log.info("Remove action blocker " + node + " successfully.");
         }
-        return Long.parseLong(hsid);
+        return true;
     }
 
     public static void removeStopNodeIndicator(ZooKeeper zk, String node, VoltLogger log) {

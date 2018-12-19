@@ -199,6 +199,15 @@ public abstract class JoinProducerBase extends SiteTasker {
 
     protected abstract VoltLogger getLogger();
 
+    public void notifyOfSnapshotNonce(String nonce, long snapshotSpHandle) {
+        if (nonce.equals(m_snapshotNonce)) {
+            getLogger().debug("Started recording transactions after snapshot nonce " + nonce);
+            if (m_taskLog != null) {
+                m_taskLog.enableRecording(snapshotSpHandle);
+            }
+        }
+    }
+
     // Based on whether or not we just did real work, return ourselves to the task queue either now
     // or after waiting a few milliseconds
     protected void returnToTaskQueue(boolean sourcesReady)
@@ -207,8 +216,8 @@ public abstract class JoinProducerBase extends SiteTasker {
             // If we've done something meaningful, go ahead and return ourselves to the queue immediately
             m_taskQueue.offer(this);
         } else {
-            // Otherwise, avoid spinning too aggressively, so wait a few milliseconds before requeueing
-            VoltDB.instance().scheduleWork(new ReturnToTaskQueueAction(), 5, -1, TimeUnit.MILLISECONDS);
+            // Otherwise, avoid spinning too aggressively, so wait a millisecond before requeueing
+            VoltDB.instance().scheduleWork(new ReturnToTaskQueueAction(), 1, -1, TimeUnit.MILLISECONDS);
         }
     }
 }

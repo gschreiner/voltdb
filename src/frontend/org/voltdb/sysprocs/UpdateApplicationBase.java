@@ -406,10 +406,9 @@ public abstract class UpdateApplicationBase extends VoltNTSystemProcedure {
     protected String verifyAndWriteCatalogJar(CatalogChangeResult ccr)
     {
         String procedureName = "@VerifyCatalogAndWriteJar";
-        String diffCommands = CompressionService.decodeBase64AndDecompress(ccr.encodedDiffCommands);
 
         CompletableFuture<Map<Integer,ClientResponse>> cf =
-                callNTProcedureOnAllHosts(procedureName, ccr.catalogBytes, diffCommands,
+                callNTProcedureOnAllHosts(procedureName, ccr.catalogBytes, ccr.encodedDiffCommands,
                         ccr.catalogHash, ccr.deploymentBytes);
 
         Map<Integer, ClientResponse> resultMapByHost = null;
@@ -468,9 +467,19 @@ public abstract class UpdateApplicationBase extends VoltNTSystemProcedure {
      * @return next generation id (a unique long value)
      */
     public static long getNextGenerationId() {
-        return UniqueIdGenerator.makeIdFromComponents(System.currentTimeMillis(),
-                                                      m_generationId.incrementAndGet(),
-                                                      MpInitiator.MP_INIT_PID);
+        // ENG-14511- these calls may hit assertion failures in testing environments
+        try {
+            return UniqueIdGenerator.makeIdFromComponents(System.currentTimeMillis(),
+                    m_generationId.incrementAndGet(),
+                    MpInitiator.MP_INIT_PID);
+        }
+        catch (Throwable t) {
+            // Try resetting the generation
+            m_generationId.set(0L);
+            return UniqueIdGenerator.makeIdFromComponents(System.currentTimeMillis(),
+                    m_generationId.incrementAndGet(),
+                    MpInitiator.MP_INIT_PID);
+        }
     }
 
     protected CompletableFuture<ClientResponse> updateApplication(String invocationName,
@@ -549,7 +558,17 @@ public abstract class UpdateApplicationBase extends VoltNTSystemProcedure {
             }
         }
 
-        long genId = getNextGenerationId();
+        // ENG-14511 on assertion failures in test environment, ensure removal of action blocker
+        long genId = 0L;
+        try {
+            genId = getNextGenerationId();
+        }
+        catch (Exception ex) {
+            VoltZK.removeActionBlocker(zk, VoltZK.catalogUpdateInProgress, hostLog);
+            errMsg = "Unexpected error generating Id: " + ex.getMessage();
+            return makeQuickResponse(ClientResponseImpl.GRACEFUL_FAILURE, errMsg);
+        }
+
         // update the catalog jar
         CompletableFuture<ClientResponse> first = callProcedure("@UpdateCore",
                                                     ccr.encodedDiffCommands,

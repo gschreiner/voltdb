@@ -30,7 +30,7 @@ import org.voltdb.catalog.Procedure;
 import org.voltdb.catalog.Table;
 import org.voltdb.compiler.PlannerTool;
 import org.voltdb.compiler.StatementCompiler;
-import org.voltdb.sysprocs.LowImpactDelete.ComparisonOperation;
+import org.voltdb.sysprocs.LowImpactDeleteNT.ComparisonOperation;
 import org.voltdb.utils.LogKeys;
 
 import com.google_voltpatches.common.collect.ImmutableMap;
@@ -298,6 +298,8 @@ public class LoadedProcedureSet {
             // for this plan-on-the-fly procedure
             pr.setProcNameToLoadForFragmentTasks(newCatProc.getTypeName());
             m_defaultProcCache.put(procName, pr);
+            // also list nibble delete into default procedures
+            m_defaultProcManager.m_defaultProcMap.put(procName.toLowerCase(), pr.getCatalogProcedure());
         }
         return pr;
     }

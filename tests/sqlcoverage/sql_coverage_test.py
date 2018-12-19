@@ -233,24 +233,30 @@ def get_max_mismatches(comparison_database, suite_name):
     # Kludge to not fail for known issues, when running against PostgreSQL
     # (or the PostGIS extension of PostgreSQL)
     if comparison_database.startswith('Post'):
-        # Known failures in the basic-joins test suite, and in the basic-index-joins,
-        # and basic-compoundex-joins "extended" test suites (see ENG-10775)
-        if (config_name == 'basic-joins' or config_name == 'basic-index-joins' or
-              config_name == 'basic-compoundex-joins'):
-            max_mismatches = 5280
-        # Known failures, related to the ones above, in the basic-int-joins test
-        # suite (see ENG-10775, ENG-11401)
-        elif config_name == 'basic-int-joins':
-            max_mismatches = 600
         # Known failures in the joined-matview-* test suites ...
         # Failures in joined-matview-default-full due to ENG-11086
-        elif config_name == 'joined-matview-default-full':
-            max_mismatches = 3387
+        if config_name == 'joined-matview-default-full':
+            max_mismatches = 3390
         # Failures in joined-matview-int due to ENG-11086
         elif config_name == 'joined-matview-int':
             max_mismatches = 46440
 
     return max_mismatches
+
+
+def ignore_known_mismatches(comparison_database, suite_name, reproducer):
+    """Returns the type of reproducer to use when reproducing mismatches or
+    other problems. Normally, this just means the same 'reproducer' passed
+    in, but in certain cases, when running against PostgreSQL (or the PostGIS
+    extension of PostgreSQL), and using the default reproducer, 'DML', and
+    the test suite is one of those that regularly has known failures (see
+    get_max_mismatches above), then Reproduce.NONE should be used instead,
+    to avoid producing lots of meaningless reproducer*.html files.
+    """
+    if (comparison_database.startswith('Post') and reproducer == Reproduce.DML and
+            suite_name in ['joined-matview-default-full', 'joined-matview-int']):
+        reproducer = Reproduce.NONE
+    return reproducer
 
 
 def get_config_path(basedir, config_key, config_value):
@@ -424,8 +430,9 @@ def run_config(suite_name, config, basedir, output_dir, random_seed,
         compare_results = imp.load_source("normalizer", config["normalizer"]).compare_results
         success = compare_results(suite_name, random_seed, statements_path, cmpdb_path,
                                   jni_path, output_dir, report_invalid, report_all, extraStats,
-                                  comparison_database, modified_sql_path, max_mismatches,
-                                  within_minutes, reproducer, config.get("ddl"))
+                                  comparison_database, modified_sql_path, max_mismatches, within_minutes,
+                                  ignore_known_mismatches(comparison_database, config_name, reproducer),
+                                  config.get("ddl"))
     except:
         print >> sys.stderr, "Compare (VoltDB & " + comparison_database + ") results crashed!"
         traceback.print_exc()
@@ -438,7 +445,7 @@ def run_config(suite_name, config, basedir, output_dir, random_seed,
                       gray_zero_html_table_element + gray_zero_html_table_element +
                       gray_zero_html_table_element + gray_zero_html_table_element +
                       gray_zero_html_table_element + gray_zero_html_table_element +
-                      gray_zero_html_table_element +
+                      gray_zero_html_table_element + gray_zero_html_table_element +
                       get_numerical_html_table_element(volt_crashes, error_above=0) +
                       get_numerical_html_table_element(cmp_crashes,  error_above=0) +
                       get_numerical_html_table_element(diff_crashes, error_above=0) + someStats + '</tr>' )
@@ -478,8 +485,9 @@ def run_config(suite_name, config, basedir, output_dir, random_seed,
     global invalid_statements
     global mismatched_statements
     global keyStats_start_index
-    global total_volt_npes
-    global total_cmp_npes
+    global total_volt_fatal_excep
+    global total_volt_nonfatal_excep
+    global total_cmp_excep
     global total_volt_crashes
     global total_cmp_crashes
     global total_diff_crashes
@@ -496,8 +504,9 @@ def run_config(suite_name, config, basedir, output_dir, random_seed,
     total_statements      += int(next_keyStats_column_value())
     mismatched_statements += int(next_keyStats_column_value())
     next_keyStats_column_value()  # ignore Mismatched %
-    total_volt_npes       += int(next_keyStats_column_value())
-    total_cmp_npes        += int(next_keyStats_column_value())
+    total_volt_fatal_excep    += int(next_keyStats_column_value())
+    total_volt_nonfatal_excep += int(next_keyStats_column_value())
+    total_cmp_excep           += int(next_keyStats_column_value())
     total_volt_crashes    += volt_crashes
     total_cmp_crashes     += cmp_crashes
     total_diff_crashes    += diff_crashes
@@ -708,8 +717,9 @@ if __name__ == "__main__":
     invalid_statements = 0
     mismatched_statements = 0
     total_statements = 0
-    total_volt_npes = 0
-    total_cmp_npes = 0
+    total_volt_fatal_excep = 0
+    total_volt_nonfatal_excep = 0
+    total_cmp_excep = 0
     total_volt_crashes = 0
     total_cmp_crashes  = 0
     total_diff_crashes = 0
@@ -749,6 +759,9 @@ if __name__ == "__main__":
     parser.add_option("-g", "--generate-only", action="store_true",
                       dest="generate_only", default=False,
                       help="only generate and report SQL statements, do not start any database servers")
+    parser.add_option("-H", "--hsql", action="store_true",
+                      dest="hsql", default=False,
+                      help="compare VoltDB results to HSqlDB, rather than PostgreSQL")
     parser.add_option("-P", "--postgresql", action="store_true",
                       dest="postgresql", default=False,
                       help="compare VoltDB results to PostgreSQL, rather than HSqlDB")
@@ -792,8 +805,11 @@ if __name__ == "__main__":
     else:
         configs_to_run = config_list.get_configs()
 
-    comparison_database = "HSqlDB"  # default value
-    debug_transform_sql = False
+    comparison_database = "PostgreSQL"  # default value (new 11/2018)
+    debug_transform_sql = True
+    if options.hsql:
+        comparison_database = 'HSqlDB'
+        debug_transform_sql = False
     if options.postgresql:
         comparison_database = 'PostgreSQL'
         debug_transform_sql = True
@@ -846,6 +862,15 @@ if __name__ == "__main__":
         # for certain rare cases involving known errors in PostgreSQL
         if result["mis"] > get_max_mismatches(comparison_database, config_name):
             success = False
+        # If the number of mismatches is nonzero but less than (or equal to) the
+        # acceptable maximum, then we don't need to save the detailed results,
+        # so delete them
+        elif result["mis"] > 0:
+            print "Deleting unneeded result files, for expected mismatches:\n    " + \
+                report_dir + "/*.html"
+            for file in os.listdir(report_dir):
+                if file.endswith(".html") and not file.endswith("index.html"):
+                    os.remove(os.path.join(report_dir, file))
 
     # Write the summary
     time1 = time.time()
@@ -864,8 +889,9 @@ if __name__ == "__main__":
                            "\n<td align=right>" + str(total_statements) + "</td>" + \
                            "\n<td align=right>" + str(mismatched_statements) + "</td>" + \
                            "\n<td align=right>" + mismatched_percent + "%</td>" + \
-                           "\n<td align=right>" + str(total_volt_npes) + "</td>" + \
-                           "\n<td align=right>" + str(total_cmp_npes) + "</td>" + \
+                           "\n<td align=right>" + str(total_volt_fatal_excep) + "</td>" + \
+                           "\n<td align=right>" + str(total_volt_nonfatal_excep) + "</td>" + \
+                           "\n<td align=right>" + str(total_cmp_excep) + "</td>" + \
                            "\n<td align=right>" + str(total_volt_crashes) + "</td>" + \
                            "\n<td align=right>" + str(total_cmp_crashes) + "</td>" + \
                            "\n<td align=right>" + str(total_diff_crashes) + "</td>" + \
@@ -881,6 +907,28 @@ if __name__ == "__main__":
                            "\n<td align=right>" + minutes_colon_seconds(time1-time0) + "</td></tr>\n"
     generate_summary(output_dir, statistics, comparison_database)
 
+    # output statistics for SQLCoverage auto filer
+    with open(os.path.join(output_dir, "stats.txt"), "w") as hack:
+        stats = \
+            {
+            'valid_statements' : valid_statements,
+            'valid_percent' : valid_percent,
+            'invalid_statements' : invalid_statements,
+            'invalid_percent' : invalid_percent,
+            'total_statements' : total_statements,
+            'mismatched_statements' : mismatched_statements,
+            'mismatched_percent' : mismatched_percent,
+            'total_volt_fatal_excep' : total_volt_fatal_excep,
+            'total_volt_nonfatal_excep' : total_volt_nonfatal_excep,
+            'total_cmp_excep' : total_cmp_excep,
+            'total_volt_crashes' : total_volt_crashes,
+            'total_cmp_crashes' : total_cmp_crashes,
+            'total_diff_crashes' : total_diff_crashes,
+            'comparison_database' : comparison_database
+            }
+        hack.write(str(stats))
+        hack.close()
+
     # Print the total time, for each type of activity
     sys.stdout.flush()
     sys.stderr.flush()
@@ -893,11 +941,13 @@ if __name__ == "__main__":
     if total_num_unresolved > 0:
         success = False
         print "Total number of invalid statements with unresolved symbols: %d" % total_num_unresolved
-    if total_cmp_npes > 0:
-        print "Total number of " + comparison_database + " NullPointerExceptions (NPEs): %d" % total_cmp_npes
-    if total_volt_npes > 0:
+    if total_cmp_excep > 0:
+        print "Total number of " + comparison_database + " (all) Exceptions: %d" % total_cmp_excep
+    if total_volt_nonfatal_excep > 0:
+        print "Total number of VoltDB Minor Exceptions: %d" % total_volt_nonfatal_excep
+    if total_volt_fatal_excep > 0:
         success = False
-        print "Total number of VoltDB NullPointerExceptions (NPEs): %d" % total_volt_npes
+        print "Total number of VoltDB Fatal Exceptions: %d" % total_volt_fatal_excep
     if mismatched_statements > 0:
         print "Total number of mismatched statements (i.e., test failures): %d" % mismatched_statements
     if total_volt_crashes > 0 or total_cmp_crashes > 0 or total_diff_crashes > 0:

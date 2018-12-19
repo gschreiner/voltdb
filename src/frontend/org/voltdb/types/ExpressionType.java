@@ -89,6 +89,8 @@ public enum ExpressionType {
         // greater than equal operator between left and right
     COMPARE_LIKE                 (ComparisonExpression.class, 16, "LIKE", true),
         // LIKE operator (left LIKE right). both children must be string.
+    COMPARE_STARTSWITH           (ComparisonExpression.class, 150, "STARTS WITH", true),
+        // STARTS WITH operator. string STARTS WITH pattern. both sides must be string.
     COMPARE_IN                   (InComparisonExpression.class, 17, "IN", true),
         // IN operator. left IN right. right must be VectorValue
     // value 18 is assigned to OPERATOR_EXISTS
@@ -142,6 +144,7 @@ public enum ExpressionType {
     AGGREGATE_WINDOWED_MAX        (WindowFunctionExpression.class,  73, "MAX"),
     AGGREGATE_WINDOWED_MIN        (WindowFunctionExpression.class,  74, "MIN"),
     AGGREGATE_WINDOWED_SUM        (WindowFunctionExpression.class,  75, "SUM"),
+    AGGREGATE_WINDOWED_ROW_NUMBER (WindowFunctionExpression.class,  76, "ROW_NUMBER"),
     // No support for PERCENT_RANK yet.
     // AGGREGATE_WINDOWED_PERCENT_RANK(WindowFunctionExpression.class, 73, "PERCENT_RANK"),
     // No support for CUME_DIST yet.
@@ -282,6 +285,7 @@ public enum ExpressionType {
         m_windowedAggName = new HashMap<>();
         m_windowedAggName.put(ExpressionType.AGGREGATE_WINDOWED_RANK, "RANK");
         m_windowedAggName.put(ExpressionType.AGGREGATE_WINDOWED_DENSE_RANK, "DENSE_RANK");
+        m_windowedAggName.put(ExpressionType.AGGREGATE_WINDOWED_ROW_NUMBER, "ROW_NUMBER");
         m_windowedAggName.put(ExpressionType.AGGREGATE_WINDOWED_COUNT, "COUNT");
         m_windowedAggName.put(ExpressionType.AGGREGATE_MAX, "MAX");
         m_windowedAggName.put(ExpressionType.AGGREGATE_MIN, "MIN");

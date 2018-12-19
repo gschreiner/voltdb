@@ -36,6 +36,7 @@ from traceback import print_exc
 __SYMBOL_DEFN      = re.compile(r"(?P<symbolname>[\w-]+)\s*::=\s*(?P<definition>.*)")
 __SYMBOL_REF       = re.compile(r"{(?P<symbolname>[\w-]+)}")
 __SYMBOL_REF_REUSE = re.compile(r"{(?P<symbolname>[\w-]*):(?P<reusename>[\w-]+)}")
+__SYMBOL_REF_EXIST = re.compile(r"{(?P<symbolname>[\w-]*);(?P<existingnames>[\w,-]+)}")
 __OPTIONAL         = re.compile(r"(?<!\\)\[(?P<optionaltext>[^\[\]]*[^\[\]\\]?)\]")
 __WEIGHTED_XOR     = re.compile(r"\s+(?P<weight>\d*)(?P<xor>\|)\s+")
 __XOR              = ' | '
@@ -132,22 +133,46 @@ def get_one_sql_statement(grammar, sql_statement_type='sql-statement', max_depth
         symbol_order = []
         symbol_depth = {}
         symbol_reuse = {}
-    symbol = __SYMBOL_REF_REUSE.search(sql) or __SYMBOL_REF.search(sql)
+    symbol = __SYMBOL_REF_REUSE.search(sql) or __SYMBOL_REF.search(sql) or __SYMBOL_REF_EXIST.search(sql)
     while symbol and count < max_count:
         count += 1
         bracketed_name = symbol.group(0)
         symbol_name = symbol.group('symbolname')
-        try:
-            reuse_name = symbol.group('reusename')
-        except IndexError as ex:
-            reuse_name = None
+        symbol_opts = None
+        existing_names = []
+        reuse_name = None
         reuse_value = None
-        definition  = grammar.get(symbol_name)
+        try:
+            symbol_opts = symbol.group('existingnames')
+            existing_names = symbol_opts.split(',')
+        except IndexError as ex:
+            pass
+        if existing_names:
+            remove_names = []
+            for en in existing_names:
+                if symbol_reuse.get(en) is None:
+                    remove_names.append(en)
+            for en in remove_names:
+                existing_names.remove(en)
+            last = len(existing_names) - 1
+            for en in existing_names:
+                if (en is existing_names[last] or
+                        randrange(0, 100) < optional_percent):
+                    reuse_name = en
+                    break
+        else:
+            try:
+                reuse_name = symbol.group('reusename')
+            except IndexError as ex:
+                reuse_name = None
+        definition = grammar.get(symbol_name)
         if debug > 6:
             print 'DEBUG: sql           :', str(sql)
             print 'DEBUG: symbol_reuse  :', str(symbol_reuse)
             print 'DEBUG: bracketed_name:', str(bracketed_name)
             print 'DEBUG: symbol_name   :', str(symbol_name)
+            print 'DEBUG: symbol_opts   :', str(symbol_opts)
+            print 'DEBUG: existing_names:', str(existing_names)
             print 'DEBUG: reuse_name    :', str(reuse_name)
             print 'DEBUG: definition    :', str(definition)
 
@@ -168,19 +193,20 @@ def get_one_sql_statement(grammar, sql_statement_type='sql-statement', max_depth
                 symbol_reuse[reuse_name] = reuse_value
 
             sql = sql.replace(bracketed_name, reuse_value)
-            symbol = __SYMBOL_REF_REUSE.search(sql) or __SYMBOL_REF.search(sql)
+            symbol = __SYMBOL_REF_REUSE.search(sql) or __SYMBOL_REF.search(sql) or __SYMBOL_REF_EXIST.search(sql)
 
             # For debugging purposes, we may wish to track symbol use
             if options.echo_grammar and symbol_name:
-                symbol_order.append((symbol_name, sql, reuse_name, reuse_value))
+                symbol_order.append((symbol_name, sql, symbol_opts, str(existing_names), reuse_name, reuse_value))
             continue
 
         # For debugging purposes, we may wish to track symbol use
         if options.echo_grammar and symbol_name:
-            symbol_order.append((symbol_name, sql, reuse_name, reuse_value))
+            symbol_order.append((symbol_name, sql, symbol_opts, str(existing_names), reuse_name, reuse_value))
 
         if definition is None:
-            print "\n\nFATAL ERROR: Could not find definition of '" + str(symbol_name) + "' in grammar dictionary!!!"
+            print "\n\nFATAL ERROR: Could not find definition of '" + str(symbol_name) + \
+                  "' in grammar dictionary!!!"
             exit(22)
 
         # Check how deep into a recursive definition we're going
@@ -230,7 +256,7 @@ def get_one_sql_statement(grammar, sql_statement_type='sql-statement', max_depth
         sql = sql.replace(bracketed_name, definition, 1)
         #print 'DEBUG: sql:', sql
 
-        symbol = __SYMBOL_REF_REUSE.search(sql) or __SYMBOL_REF.search(sql)
+        symbol = __SYMBOL_REF_REUSE.search(sql) or __SYMBOL_REF.search(sql) or __SYMBOL_REF_EXIST.search(sql)
 
     if count >= max_count:
         print "Gave up after", count, "iterations: possible infinite loop in grammar dictionary!!!"
@@ -239,6 +265,10 @@ def get_one_sql_statement(grammar, sql_statement_type='sql-statement', max_depth
                 print "DEBUG: bracketed_name:", bracketed_name
             if symbol_name:
                 print "DEBUG: symbol_name   :", symbol_name
+            if symbol_name:
+                print "DEBUG: symbol_opts   :", symbol_opts
+            if existing_names:
+                print "DEBUG: existing_names:", str(existing_names)
             if definition:
                 print "DEBUG: definition    :", definition
         if debug > 5:
@@ -524,7 +554,10 @@ def print_summary(error_message=''):
                 count_sql_statements[sql_type]['invalid'] = 0
             elif count_sql_statements[sql_type].get('invalid') and not count_sql_statements[sql_type].get('valid'):
                 count_sql_statements[sql_type]['valid'] = 0
-            summary_message += '\n    {0:6s}:'.format(sql_type)
+            if len(sql_type) > 6:
+                summary_message += '\n    {0:6s}:'.format(sql_type[6:])
+            else:
+                summary_message += '\n    {0:6s}:'.format(sql_type)
             for validity in sorted(count_sql_statements[sql_type], reverse=True):
                 if validity != 'total':  # save total for last
                     count = count_sql_statements[sql_type][validity]
@@ -585,7 +618,9 @@ def increment_sql_statement_indexes(index1, index2):
         count_sql_statements[index1][index2] = 1
 
 
-def increment_sql_statement_type(type=None, validity=None, incrementTotal=True):
+def increment_sql_statement_type(type=None, num_chars_in_sql_type=6, validity=None,
+                                 incrementTotal=True, num_chars_in_sub_type=None,
+                                 sql_types_to_use_sub_type='CREATE'):
     """Increment the value of 'count_sql_statements' (a 2D dictionary, i.e.,
     a dict of dict), both for the 'total', 'total' element and for the 'type',
     if specified (i.e., for the type, 'total' element); also, if the 'validity'
@@ -593,14 +628,24 @@ def increment_sql_statement_type(type=None, validity=None, incrementTotal=True):
     values as well (i.e., the 'total', validity and type, validity elements).
     """
 
+    if num_chars_in_sub_type is None:
+        num_chars_in_sub_type = num_chars_in_sql_type
+    total_chars_in_sub_type = num_chars_in_sql_type + num_chars_in_sub_type
+
     if incrementTotal:
         increment_sql_statement_indexes('total', 'total')
         if validity:
             increment_sql_statement_indexes('total', validity)
     if type:
-        increment_sql_statement_indexes(type, 'total')
+        increment_sql_statement_indexes(type[0:num_chars_in_sql_type], 'total')
         if validity:
-            increment_sql_statement_indexes(type, validity)
+            increment_sql_statement_indexes(type[0:num_chars_in_sql_type], validity)
+        if sql_types_to_use_sub_type:
+            for sub_type in sql_types_to_use_sub_type.split(','):
+                if type[0:num_chars_in_sql_type] in sub_type or sub_type in type[0:num_chars_in_sql_type]:
+                    increment_sql_statement_indexes(type[0:total_chars_in_sub_type], 'total')
+                    if validity:
+                        increment_sql_statement_indexes(type[0:total_chars_in_sub_type], validity)
 
 
 class TimeoutException(Exception):
@@ -675,7 +720,7 @@ def print_sql_statement(sql, num_chars_in_sql_type=6):
 
         # Change the behavior of SIGALRM, to use for timeout
         signal(SIGALRM, timeout_handler)
-        max_seconds_to_wait_for_sqlcmd = 15  # larger than query timeout of 10
+        max_seconds_to_wait_for_sqlcmd = 60  # must be larger than query timeout of 10
         if debug > 4:
             print 'max_seconds_to_wait_for_sqlcmd: ' + str(max_seconds_to_wait_for_sqlcmd)
 
@@ -722,9 +767,9 @@ def print_sql_statement(sql, num_chars_in_sql_type=6):
                         # which can return multiple '(Returned N rows in X.XXs)' messages
                         continue
                     elif sql_was_echoed_as_output:
-                        increment_sql_statement_type(sql[0:num_chars_in_sql_type], 'valid')
+                        increment_sql_statement_type(sql, num_chars_in_sql_type, 'valid')
                         if sql_contains_echo_substring:
-                            increment_sql_statement_type(' [echo', 'valid', False)
+                            increment_sql_statement_type(' [echo', num_chars_in_sql_type, 'valid', False)
                         break
                     elif debug > 3:
                         # this can happen, though it's uncommon, when two SQL statements
@@ -738,9 +783,9 @@ def print_sql_statement(sql, num_chars_in_sql_type=6):
                 # indicated by the word 'ERROR' (case insensitive)
                 elif 'ERROR' in output.upper():
                     if sql_was_echoed_as_output:
-                        increment_sql_statement_type(sql[0:num_chars_in_sql_type], 'invalid')
+                        increment_sql_statement_type(sql, num_chars_in_sql_type, 'invalid')
                         if sql_contains_echo_substring:
-                            increment_sql_statement_type(' [echo', 'invalid', False)
+                            increment_sql_statement_type(' [echo', num_chars_in_sql_type, 'invalid', False)
                         break
                     elif debug > 3:
                         # this can happen, though it's uncommon, when there is a multi-line
@@ -752,9 +797,9 @@ def print_sql_statement(sql, num_chars_in_sql_type=6):
                 # respond with various messages that do not include 'ERROR'
                 elif any( all(err_msg in output for err_msg in kem) for kem in known_error_messages):
                     if sql_was_echoed_as_output:
-                        increment_sql_statement_type(sql[0:num_chars_in_sql_type], 'invalid')
+                        increment_sql_statement_type(sql, num_chars_in_sql_type, 'invalid')
                         if sql_contains_echo_substring:
-                            increment_sql_statement_type(' [echo', 'invalid', False)
+                            increment_sql_statement_type(' [echo', num_chars_in_sql_type, 'invalid', False)
                         break
                     elif debug > 2:
                         # this can happen, though it's uncommon, when there is a multi-line
@@ -779,17 +824,17 @@ def print_sql_statement(sql, num_chars_in_sql_type=6):
                             continue
 
                     # Normal 'show' command case
-                    increment_sql_statement_type(sql[0:num_chars_in_sql_type], 'valid')
+                    increment_sql_statement_type(sql, num_chars_in_sql_type, 'valid')
                     if sql_contains_echo_substring:
-                        increment_sql_statement_type(' [echo', 'valid', False)
+                        increment_sql_statement_type(' [echo', num_chars_in_sql_type, 'valid', False)
                     break
 
                 # Invalid 'show' commands return a simple error message; also, once again, these commands
                 # don't get echoed back by sqlcmd, so we don't check sql_was_echoed_as_output here
                 elif 'The valid SHOW command completions are' in output:
-                    increment_sql_statement_type(sql[0:num_chars_in_sql_type], 'invalid')
+                    increment_sql_statement_type(sql, num_chars_in_sql_type, 'invalid')
                     if sql_contains_echo_substring:
-                        increment_sql_statement_type(' [echo', 'invalid', False)
+                        increment_sql_statement_type(' [echo', num_chars_in_sql_type, 'invalid', False)
                     break
 
                 # Check if sqlcmd command not found, or if sqlcmd cannot, or
@@ -834,12 +879,14 @@ def print_sql_statement(sql, num_chars_in_sql_type=6):
             find['previous_tail'] = tail_of_log_file[len(tail_of_log_file)/2:]
 
     else:
-        increment_sql_statement_type(sql[0:num_chars_in_sql_type])
+        increment_sql_statement_type(sql, num_chars_in_sql_type)
 
     if sql_contains_echo_substring and options.echo_grammar:
         print >> echo_output_file, '\nGrammar symbols used (in order), and how many times, and resulting SQL:'
-        for (symbol, partial_sql, reuse_name, reuse_value) in symbol_order:
+        for (symbol, partial_sql, symbol_opts, existing_names, reuse_name, reuse_value) in symbol_order:
             print >> echo_output_file, "{0:1d}: {1:24s}: {2:s}".format(symbol_depth.get(symbol, 0), symbol, partial_sql)
+            if symbol_opts:
+                print >> echo_output_file, "   ;{0:23s}: {1:s}".format(symbol_opts, existing_names)
             if reuse_name:
                 print >> echo_output_file, "   :{0:23s}: {1:s}".format(reuse_name, reuse_value)
         print >> echo_output_file, "{0:27s}: {1:s}".format('Final sql', sql)
@@ -898,10 +945,11 @@ if __name__ == "__main__":
                       help="seed for random number generator; a blank string, or None, means that the seed "
                           + "should itself be randomly generated [default: None]")
     parser.add_option("-i", "--initial_type", dest="initial_type", default="insert-statement",
-                      help="a type, or comma-separated list of types, of SQL statements to generate initially; typically "
-                          + "used to initialize the database using INSERT statements [default: insert-statement]")
+                      help="a type, or comma-separated list of types, of SQL statements to generate initially; "
+                          + "typically used to initialize the database using DDL and INSERT statements "
+                          + "[default: ddl-statement,insert-statement]")
     parser.add_option("-I", "--initial_number", dest="initial_number", default=5,
-                      help="the number of each INITIAL_TYPE of SQL statement to generate [default: 5]")
+                      help="the number of each INITIAL_TYPE of SQL statement to generate [default: 200]")
     parser.add_option("-t", "--type", dest="type", default="sql-statement",
                       help="a type, or comma-separated list of types, of SQL statements to generate "
                          + "(after the initial ones, if any) [default: sql-statement]")
@@ -988,6 +1036,8 @@ if __name__ == "__main__":
     debug = int(options.debug)
     if debug > 1:
         print "DEBUG: all arguments:", " ".join(sys.argv)
+        print "DEBUG: options (all):\n", options
+        print "DEBUG: args (all)            :", args
         print "DEBUG: options.path          :", options.path
         print "DEBUG: options.grammar_files :", options.grammar_files
         print "DEBUG: options.seed          :", options.seed
@@ -1013,8 +1063,6 @@ if __name__ == "__main__":
         print "DEBUG: options.echo_grammar  :", options.echo_grammar
         print "DEBUG: options.suffix        :", options.suffix
         print "DEBUG: options.debug         :", options.debug
-        print "DEBUG: options (all):\n", options
-        print "DEBUG: args (all):", args
 
     if options.seed:
         seed_type   = 'supplied'
@@ -1120,7 +1168,18 @@ if __name__ == "__main__":
                             ["Explain doesn't support DDL"],
                             ['PartitionInfo specifies invalid parameter index for procedure'],
                             ['Failed to plan for statement'],
-                            ['Invalid parameter index value']
+                            ['Invalid parameter index value'],
+                            ['Single partitioned procedure', 'has TRUNCATE statement:'],
+                            ['Unexpected condition occurred applying DDL statements'],
+                            ['A UNIQUE or ASSUMEUNIQUE index is not allowed on a materialized view'],
+                            ['involving other tables is not supported'],
+                            ['Invalid use of UNIQUE'],
+                            ['Cannot create', 'index'],
+                            ['ASSUMEUNIQUE is not valid for an index that includes the partitioning column'],
+                            ['cannot contain aggregate expressions'],
+                            ['cannot contain calls to user defined functions'],
+                            ['cannot contain subqueries'],
+                            ['cannot include the function NOW or CURRENT_TIMESTAMP'],
                            ]
 
     # A list of headers found in responses to valid 'show' commands: one of

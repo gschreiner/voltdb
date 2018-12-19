@@ -29,6 +29,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.net.URL;
 import java.net.URLDecoder;
+import java.util.Collections;
 
 import org.junit.After;
 import org.junit.Before;
@@ -41,6 +42,7 @@ import org.voltdb.VoltType;
 import org.voltdb.client.ClientResponse;
 import org.voltdb.client.ProcCallException;
 import org.voltdb.compiler.VoltProjectBuilder;
+import org.voltdb.regressionsuites.RegressionSuite;
 import org.voltdb.utils.MiscUtils;
 
 public class TestDDLFeatures extends AdhocDDLTestBase {
@@ -57,6 +59,7 @@ public class TestDDLFeatures extends AdhocDDLTestBase {
         final URL url = TestDDLFeatures.class.getResource("fullDDL.sql");
         String schemaPath = URLDecoder.decode(url.getPath(), "UTF-8");
         builder.addSchema(schemaPath);
+        builder.setUseDDLSchema(true);
 
         boolean success = builder.compile(pathToCatalog);
         assertTrue(success);
@@ -89,7 +92,7 @@ public class TestDDLFeatures extends AdhocDDLTestBase {
         assertTrue(findTableInSystemCatalogResults("T1"));
         assertTrue(findIndexInSystemCatalogResults("area"));
         assertTrue(verifyIndexUniqueness("area", true));
-        assertEquals(indexedColumnCount("T1"), 2);
+        assertEquals(indexedColumnCount("T1"), 3);
     }
 
     @Test
@@ -130,6 +133,36 @@ public class TestDDLFeatures extends AdhocDDLTestBase {
         assertEquals(vt1.getRowCount(), 1);
         assertEquals(vt1.getLong(0), 1);
         assertEquals(vt1.getString("NAME"), "Kevin Durant");
+
+        // ENG-14210 more than 1025 parameters
+        StringBuilder tooManyParmsProcBuilder = new StringBuilder();
+        tooManyParmsProcBuilder.append("CREATE PROCEDURE ENG14210 AS SELECT * FROM T3 WHERE str IN (")
+                               .append(String.join(",", Collections.nCopies(1200, "?")))
+                               .append(");");
+
+        RegressionSuite.verifyProcFails(m_client, "The statement's parameter count 1200 must not exceed the maximum 1025",
+                "@AdHoc", tooManyParmsProcBuilder.toString());
+
+        // ENG-14487 truncate statement is not allowed for single partitioned procedures.
+        String ENG14487 = "CREATE PROCEDURE ENG14487 PARTITION ON TABLE T2 COLUMN area\n" +
+                "   AS BEGIN\n" +
+                "      select * from t2 where area=?;\n" +
+                "      truncate table t2;\n" +
+                "   END;";
+        RegressionSuite.verifyProcFails(m_client,
+                "Single partitioned procedure: ENG14487 has TRUNCATE statement: \"truncate table t2\"",
+                "@AdHoc", ENG14487);
+
+        ENG14487 = "CREATE PROCEDURE ENG14487\n" +
+                "   AS BEGIN\n" +
+                "      select * from t2 where area=?;\n" +
+                "      truncate table t2;\n" +
+                "   END;";
+        ClientResponse cr = m_client.callProcedure("@AdHoc", ENG14487);
+        assertEquals(ClientResponse.SUCCESS, cr.getStatus());
+        RegressionSuite.verifyProcFails(m_client,
+                "Single partitioned procedure: ENG14487 has TRUNCATE statement: \"truncate table t2\"",
+                "@AdHoc", "PARTITION PROCEDURE ENG14487 ON TABLE T2 COLUMN area;");
     }
 
     @Test
@@ -171,6 +204,23 @@ public class TestDDLFeatures extends AdhocDDLTestBase {
         VoltTable vt = resp.getResults()[0];
         vt.advanceToRow(0);
         assertEquals(vt.get(0, VoltType.INTEGER), 1);
+
+        // ENG-14210 more than 1025 parameters
+        RegressionSuite.verifyProcFails(m_client, "The statement's parameter count 1200 must not exceed the maximum 1025",
+                "@AdHoc", "CREATE PROCEDURE FROM CLASS org.voltdb_testprocs.fullddlfeatures.testJavaProcTooManyParams;");
+
+        // ENG-14487 truncate statement is not allowed for single partitioned procedures.
+        RegressionSuite.verifyProcFails(m_client,
+                "Single partitioned procedure: org.voltdb_testprocs.fullddlfeatures.testSinglePartitionedTruncateProc has TRUNCATE statement: \"truncate table t2;\".",
+                "@AdHoc",
+                "CREATE PROCEDURE PARTITION ON TABLE T2 COLUMN area FROM CLASS org.voltdb_testprocs.fullddlfeatures.testSinglePartitionedTruncateProc;");
+
+        ClientResponse cr = m_client.callProcedure("@AdHoc", "CREATE PROCEDURE FROM CLASS org.voltdb_testprocs.fullddlfeatures.testSinglePartitionedTruncateProc;");
+        assertEquals(ClientResponse.SUCCESS, cr.getStatus());
+
+        RegressionSuite.verifyProcFails(m_client,
+                ".*Single partitioned procedure: org.voltdb_testprocs.fullddlfeatures.testSinglePartitionedTruncateProc has TRUNCATE statement: \"truncate table t2;\"",
+                "@AdHoc", "PARTITION PROCEDURE testSinglePartitionedTruncateProc ON TABLE T2 COLUMN area;");
     }
 
     @Test
