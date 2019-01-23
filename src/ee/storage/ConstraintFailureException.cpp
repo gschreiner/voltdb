@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -75,7 +75,7 @@ void ConstraintFailureException::p_serialize(ReferenceSerializeOutput *output) c
     output->writeIntAt(tableSizePosition, static_cast<int32_t>(output->position() - tableSizePosition - 4));
 }
 
-ConstraintFailureException::~ConstraintFailureException() {
+ConstraintFailureException::~ConstraintFailureException() throw () {
     // if delayed tuple deallocation for serialization (by passing in tableSurgeon),
     // do cleanup here
     VOLT_DEBUG("ConstraintFailureException has table surgeon %s", ((m_surgeon!=NULL) ? "true": "false"));

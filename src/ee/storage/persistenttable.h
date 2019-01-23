@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -631,6 +631,9 @@ private:
     void deleteFromAllIndexes(TableTuple* tuple);
 
     void tryInsertOnAllIndexes(TableTuple* tuple, TableTuple* conflict);
+
+    void checkUpdateOnExpressions(TableTuple& targetTupleToUpdate,
+          TableTuple const& sourceTupleWithNewValues, std::vector<TableIndex*> const& indexesToUpdate);
 
     bool checkUpdateOnUniqueIndexes(TableTuple& targetTupleToUpdate,
                                     TableTuple const& sourceTupleWithNewValues,

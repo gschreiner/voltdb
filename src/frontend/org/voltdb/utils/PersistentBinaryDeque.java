@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -333,7 +333,7 @@ public class PersistentBinaryDeque implements BinaryDeque {
                                     if (m_usageSpecificLog.isDebugEnabled()) {
                                         m_usageSpecificLog.debug("Segment " + qs.file() + " has been closed and deleted during init");
                                     }
-                                    qs.closeAndDelete();
+                                    qs.closeAndTruncate();
                                     return false;
                                 }
                             }
@@ -464,7 +464,7 @@ public class PersistentBinaryDeque implements BinaryDeque {
             m_numObjects -= segment.getNumEntries();
             iterator.remove();
             m_usageSpecificLog.debug("Segment " + segment.file() + " has been closed and deleted by truncator");
-            segment.closeAndDelete();
+            segment.closeAndTruncate();
         }
 
         /*

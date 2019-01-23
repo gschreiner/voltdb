@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -132,7 +132,7 @@ public class Test2PTransactionExport {
 
         cluster = new LocalCluster("test2pexport.jar", 4, 2, KFACTOR,
                                    BackendTarget.NATIVE_EE_JNI, LocalCluster.FailureState.ALL_RUNNING,
-                                   true, false, additionalEnv);
+                                   true, additionalEnv);
         cluster.setNewCli(true);
         cluster.setHasLocalServer(false);
         cluster.setCallingMethodName(method);

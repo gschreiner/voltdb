@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -63,7 +63,7 @@ public class TestImporterStopAfterIncompleteStart {
                 1, 1, 0, 0,
                 BackendTarget.NATIVE_EE_JNI,
                 LocalCluster.FailureState.ALL_RUNNING,
-                false, false, null);
+                false, null);
 
         List<String> logSearchPatterns = new ArrayList<>(1);
         logSearchPatterns.add(CHANNEL_UNREGISTRATION_PATTERN);

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -361,7 +361,7 @@ public class TestExportStatsSuite extends TestExportBaseSocketExport {
         project.addProcedures(PROCEDURES);
 
         config = new LocalCluster("export-ddl-cluster-rep.jar", 2, 1, KFACTOR,
-                BackendTarget.NATIVE_EE_JNI, LocalCluster.FailureState.ALL_RUNNING, true, false, additionalEnv);
+                BackendTarget.NATIVE_EE_JNI, LocalCluster.FailureState.ALL_RUNNING, true, additionalEnv);
         config.setHasLocalServer(false);
         boolean compile = config.compile(project);
         assertTrue(compile);
@@ -371,7 +371,7 @@ public class TestExportStatsSuite extends TestExportBaseSocketExport {
 
         // A catalog change that enables snapshots
         config = new LocalCluster("export-ddl-cluster-rep2.jar",  2, 1, KFACTOR,
-                BackendTarget.NATIVE_EE_JNI, LocalCluster.FailureState.ALL_RUNNING, true, false, additionalEnv);
+                BackendTarget.NATIVE_EE_JNI, LocalCluster.FailureState.ALL_RUNNING, true, additionalEnv);
         project = new VoltProjectBuilder();
         project.setSecurityEnabled(true, true);
         project.addRoles(GROUPS);
