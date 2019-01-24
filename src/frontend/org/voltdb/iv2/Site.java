@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -1486,7 +1486,7 @@ public class Site implements Runnable, SiteProcedureConnection, SiteSnapshotConn
                     catalogTable.getSignature());
             // assign the stats to the other partition's value
             ExportManager.instance().updateInitialExportStateToSeqNo(m_partitionId, catalogTable.getSignature(),
-                    false, sequenceNumbers.getSecond());
+                    false, true, tableEntry.getValue(), m_sysprocContext.isLowestSiteId());
         }
 
         if (drSequenceNumbers != null) {

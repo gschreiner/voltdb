@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -735,6 +735,9 @@ public class DDLCompiler {
         final CatalogMap<Table> tables = db.getTables();
         for (Table table : tables) {
             String tableName = table.getTypeName();
+            // Here, we restore that the table is always replicated, and set it to be partitioned if
+            // the partition makes sense.
+            table.setIsreplicated(true);
 
             if (m_tracker.m_partitionMap.containsKey(tableName.toLowerCase())) {
 
@@ -1282,8 +1285,11 @@ public class DDLCompiler {
         final String streamVerticalPartitionColumn = node.attributes.get("verticalpartcolumns");
         // all tables start replicated
         // if a partition is found in the project file later,
-        //  then this is reversed
-        table.setIsreplicated(true);
+        //  then this is reversed;
+        // But the index creation needs to know if the table is replicated, and coerce
+        // any ASSUMEUNIQUE index to be UNIQUE index on replicated table. Therefore, we
+        // set it according to current DDL state, then recheck table.m_isreplicated in handlePartitions().
+        table.setIsreplicated(! node.attributes.containsKey("partitioncolumn"));
 
         // map of index replacements for later constraint fixup
         final Map<String, String> indexReplacementMap = new TreeMap<>();
@@ -1664,6 +1670,7 @@ public class DDLCompiler {
         // can't be indexed like boolean, geo ... We gather rest of expression into
         // checkExpressions list.  We will check on them all at once.
         List<AbstractExpression> checkExpressions = new ArrayList<>();
+        final UnsafeOperatorsForDDL unsafeOps = new UnsafeOperatorsForDDL();
         for (VoltXMLElement subNode : node.children) {
             if (subNode.name.equals("exprs")) {
                 exprs = new ArrayList<>();
@@ -1684,7 +1691,6 @@ public class DDLCompiler {
                         throw compiler.new VoltCompilerException("Cannot create unique index \""+ name +
                                 "\" because it contains " + exprMsg + ", which is not supported.");
                     }
-
                     // rest of the validity guards will be evaluated after collecting all the expressions.
                     checkExpressions.add(expr);
                     exprs.add(expr);
@@ -1696,6 +1702,7 @@ public class DDLCompiler {
                 assert(predicateXML != null);
                 predicate = buildPartialIndexPredicate(dummy, name,
                         predicateXML, table, compiler);
+                predicate.findUnsafeOperatorsForDDL(unsafeOps);
             }
         }
 
@@ -1718,7 +1725,6 @@ public class DDLCompiler {
             }
         }
 
-        UnsafeOperatorsForDDL unsafeOps = new UnsafeOperatorsForDDL();
         if (exprs == null) {
             for (int i = 0; i < colNames.length; i++) {
                 VoltType colType = VoltType.get((byte)columns[i].getType());
@@ -1839,7 +1845,17 @@ public class DDLCompiler {
         }
 
         index.setUnique(unique);
-        if (assumeUnique) {
+        if (! index.getTypeName().startsWith(HSQLInterface.AUTO_GEN_PREFIX) && table.getIsreplicated() && assumeUnique) {
+            // Warn and convert AssumeUnique -> Unique index only on
+            // non-auto-generated index (i.e. from "CREATE ASSUMEUNIQUE INDEX ..." statement rather than "CREATE TABLE(...)" statement),
+            // because "PARTITION TABLE ..." statement cannot be specified together with "CREATE TABLE" statement!
+            final String warn = String.format(
+                    "Converting ASSUMEUNIQUE index %s to UNIQUE because table %s is a replicated table.",
+                    index.getTypeName(), table.getTypeName());
+            compiler.addWarn(warn);
+            System.err.println(warn);
+            assumeUnique = false;
+        } else if (assumeUnique) {
             index.setUnique(true);
         }
         index.setAssumeunique(assumeUnique);

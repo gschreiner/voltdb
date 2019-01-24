@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -465,8 +465,8 @@ public class MpTransactionState extends TransactionState
                         }
                     }
                     tmLog.warn(deadlockMsg.toString());
-                    m_mbox.send(com.google_voltpatches.common.primitives.Longs.toArray(m_useHSIds), new DumpMessage());
-                    m_mbox.send(m_mbox.getHSId(), new DumpMessage());
+                    m_mbox.send(com.google_voltpatches.common.primitives.Longs.toArray(m_useHSIds), new DumpMessage(txnId));
+                    m_mbox.send(m_mbox.getHSId(), new DumpMessage(txnId));
                 }
 
                 if (msg != null) {

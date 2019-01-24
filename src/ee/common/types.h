@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -139,6 +139,8 @@ enum ConstraintType {
     CONSTRAINT_TYPE_PRIMARY_KEY    = 4,
     CONSTRAINT_TYPE_NOT_NULL       = 5,
     CONSTRAINT_TYPE_PARTITIONING   = 6,
+    CONSTRAINT_TYPE_LIMIT          = 7,                    // org.voltdb.types.ConstraintType.java
+    CONSTRAINT_TYPE_NUMERIC        = 8,
 };
 
 // ------------------------------------------------------------------

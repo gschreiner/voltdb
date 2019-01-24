@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -170,8 +170,7 @@ public class MpInitiator extends BaseInitiator implements Promotable
 
                     // THIS IS where map cache should be updated, not
                     // in the promotion algorithm.
-                    LeaderCacheWriter iv2masters = new LeaderCache(m_messenger.getZK(),
-                            m_zkMailboxNode);
+                    LeaderCacheWriter iv2masters = new LeaderCache(m_messenger.getZK(), "MpInitiator", m_zkMailboxNode);
                     iv2masters.put(m_partitionId, m_initiatorMailbox.getHSId());
                     TTLManager.instance().scheduleTTLTasks();
                 }

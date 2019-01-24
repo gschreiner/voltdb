@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -483,7 +483,7 @@ public class ExportManager
             File exportOverflowDirectory = new File(VoltDB.instance().getExportOverflowPath());
             ExportGeneration generation = new ExportGeneration(exportOverflowDirectory);
             generation.initialize(m_messenger, m_hostId, catalogContext,
-                    connectors, localPartitionsToSites, exportOverflowDirectory);
+                    connectors, newProcessor, localPartitionsToSites, exportOverflowDirectory);
 
             m_generation.set(generation);
             newProcessor.setExportGeneration(generation);
@@ -546,13 +546,13 @@ public class ExportManager
                 exportLog.debug("First stream created processor will be initialized: " + m_loaderClass);
             }
             try {
+                ExportDataProcessor newProcessor = getNewProcessorWithProcessConfigSet(m_processorConfig);
+                m_processor.set(newProcessor);
                 generation.initializeGenerationFromCatalog(catalogContext,
-                        connectors, m_hostId, m_messenger, localPartitionsToSites);
+                        connectors, newProcessor, m_hostId, m_messenger, localPartitionsToSites);
                 if (exportLog.isDebugEnabled()) {
                     exportLog.debug("Creating connector " + m_loaderClass);
                 }
-                ExportDataProcessor newProcessor = getNewProcessorWithProcessConfigSet(m_processorConfig);
-                m_processor.set(newProcessor);
                 newProcessor.setExportGeneration(generation);
                 if (m_startPolling && !m_processorConfig.isEmpty()) {
                     newProcessor.startPolling();
@@ -607,25 +607,25 @@ public class ExportManager
         if (exportLog.isDebugEnabled()) {
             exportLog.debug("Existing export datasources unassigned.");
         }
-        //Load any missing tables.
-        generation.initializeGenerationFromCatalog(catalogContext, connectors, m_hostId, m_messenger, partitions);
-        for (Pair<Integer, Integer> partition : partitions) {
-            generation.updateAckMailboxes(partition.getFirst(), null);
-        }
-
-        //We create processor even if we dont have any streams.
         try {
             ExportDataProcessor newProcessor = getNewProcessorWithProcessConfigSet(config);
+            //Load any missing tables.
+            generation.initializeGenerationFromCatalog(catalogContext, connectors, newProcessor,
+                    m_hostId, m_messenger, partitions);
+            for (Pair<Integer, Integer> partition : partitions) {
+                generation.updateAckMailboxes(partition.getFirst(), null);
+            }
+            //We create processor even if we dont have any streams.
             newProcessor.setExportGeneration(generation);
             if (m_startPolling && !config.isEmpty()) {
                 newProcessor.startPolling();
             }
             m_processor.getAndSet(newProcessor);
             newProcessor.readyForData();
-        }
-        catch (Exception crash) {
+        } catch (Exception crash) {
             VoltDB.crashLocalVoltDB("Error creating next export processor", true, crash);
         }
+
         for (int partitionId : m_masterOfPartitions) {
             generation.acceptMastership(partitionId);
         }
@@ -673,16 +673,6 @@ public class ExportManager
     public static void pushEndOfStream(
             int partitionId,
             String signature) {
-        ExportManager instance = instance();
-        try {
-            ExportGeneration generation = instance.m_generation.get();
-            if (generation != null) {
-                generation.pushEndOfStream(partitionId, signature);
-            }
-        } catch (Exception e) {
-            //Don't let anything take down the execution site thread
-            exportLog.error("Error pushing export end of stream", e);
-        }
     }
     /*
      * This method pulls double duty as a means of pushing export buffers
@@ -720,13 +710,16 @@ public class ExportManager
     }
 
     public void updateInitialExportStateToSeqNo(int partitionId, String signature,
-                                                boolean isRecover, long sequenceNumber) {
+                                                boolean isRecover, boolean isRejoin,
+                                                Map<Integer, Pair<Long, Long>> sequenceNumberPerPartition,
+                                                boolean isLowestSite) {
         //If the generation was completely drained, wait for the task to finish running
         //by waiting for the permit that will be generated
         ExportGeneration generation = m_generation.get();
         if (generation != null) {
             generation.updateInitialExportStateToSeqNo(partitionId, signature,
-                                                       isRecover, sequenceNumber);
+                                                       isRecover, isRejoin,
+                                                       sequenceNumberPerPartition, isLowestSite);
         }
     }
 

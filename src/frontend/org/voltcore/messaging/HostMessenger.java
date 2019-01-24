@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -287,6 +287,12 @@ public class HostMessenger implements SocketJoiner.JoinHandler, InterfaceToMesse
         {
             final JSONObject obj = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
             return new HostInfo(obj.getString(HOST_IP), obj.getString(GROUP), obj.getInt(LOCAL_SITES_COUNT));
+        }
+
+        @Override
+        public String toString() {
+            return "HostInfo [m_hostIp=" + m_hostIp + ", m_group=" + m_group + ", m_localSitesCount="
+                    + m_localSitesCount + "]";
         }
     }
 

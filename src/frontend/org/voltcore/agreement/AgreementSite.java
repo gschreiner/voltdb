@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2018 VoltDB Inc.
+ * Copyright (C) 2008-2019 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -617,7 +617,7 @@ public class AgreementSite implements org.apache.zookeeper_voltpatches.server.Zo
             org.voltdb.VoltDB.crashLocalVoltDB(
                     "Aborting recovery due to a remote node (" + CoreUtils.hsIdToString(faultMessage.failedSite) +
                     ") failure. Retry again.",
-                    true,
+                    false,
                     null);
         }
         Set<Long> unknownFaultedHosts = new TreeSet<>();
