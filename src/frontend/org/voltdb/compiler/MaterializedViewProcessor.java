@@ -413,6 +413,7 @@ public class MaterializedViewProcessor {
         // Otherwise, the view table just doesn't have a partitioning column
         // -- it is seemingly randomly distributed,
         // and its grouped columns are only locally unique but not globally unique.
+    	// TODO Geo: Materialized views need be partitioned to
         Table destTable = mvi.getDest();
         // Get the grouped columns in "index" order.
         // This order corresponds to the iteration order of the MaterializedViewInfo's group by columns.

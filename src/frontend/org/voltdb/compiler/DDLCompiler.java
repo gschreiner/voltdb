@@ -789,6 +789,37 @@ public class DDLCompiler {
                     }
                 }
             }
+            if (m_tracker.m_verticalPartitionMap.containsKey(tableName.toLowerCase())) {
+
+				String[] colsName = m_tracker.m_verticalPartitionMap.get(tableName.toLowerCase()).split(",");
+				List <Column> verticalPartitionColumns = new ArrayList();
+				for (String colName : colsName) {
+					if (colName != null) {
+						colName = colName.trim();
+						assert (tables.getIgnoreCase(tableName) != null);
+						if (m_matViewMap.containsKey(table)) {
+							msg += "the materialized view is automatically partitioned based on its source table. "
+									+ "Invalid PARTITION statement on view table " + tableName + ".";
+							throw m_compiler.new VoltCompilerException(msg);
+						}
+						final Column partitionCol = table.getColumns().getIgnoreCase(colName);
+						// make sure the column exists
+						if (partitionCol == null) {
+							msg += "PARTITION has unknown COLUMN '" + colName + "'";
+							throw m_compiler.new VoltCompilerException(msg);
+						}
+						// make sure the column is marked not-nullable is no more necessary
+//						if (partitionCol.getNullable() == true) {
+//							msg += "Partition column '" + tableName + "." + colName + "' is nullable. "
+//									+ "Partition columns must be constrained \"NOT NULL\".";
+//							throw m_compiler.new VoltCompilerException(msg);
+//						}
+						verticalPartitionColumns.add(partitionCol);
+					}
+				}
+				verticalPartitionColumns.forEach(col -> table.getVerticalpartitioncolumns().add(col.getName()));
+				table.setIsreplicated(false);
+            }
         }
     }
 
@@ -913,7 +944,7 @@ public class DDLCompiler {
 
                 //TODO add new feature for multiple levels of partitions, simple mapping is doed by now.
                 if (verticalPartitionCols != null) {
-                    m_tracker.addPartition(tableName, verticalPartitionCols);
+                    m_tracker.addVerticalPartition(tableName, verticalPartitionCols);
                 }
                 else if (partitionCol != null) {
                     m_tracker.addPartition(tableName, partitionCol);

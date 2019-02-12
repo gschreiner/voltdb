@@ -43,6 +43,7 @@ import org.voltdb.compiler.VoltCompiler.VoltCompilerException;
 public class VoltDDLElementTracker {
     final VoltCompiler m_compiler;
     final Map<String, String> m_partitionMap = new HashMap<>();
+    final Map<String, String> m_verticalPartitionMap = new HashMap<>();
     final Map<String, ProcedureDescriptor> m_procedureMap =
             new HashMap<>();
     // map from export group name to a sorted set of table names in that group
@@ -86,6 +87,30 @@ public class VoltDDLElementTracker {
     void removePartition(String tableName)
     {
         m_partitionMap.remove(tableName);
+    }
+
+    /**
+     * Add a table/column vertical partition mapping for a PARTITION/REPLICATE statements.
+     * Validate input data and reject duplicates.
+     *
+     * @param tableName table name
+     * @param colName column name
+     */
+    //FIXME change the map form for track partitions movements
+    void addVerticalPartition(String tableName, String colName)
+    {
+        if (m_verticalPartitionMap.containsKey(tableName.toLowerCase())) {
+            m_compiler.addInfo(String.format("Replacing partition column %s on table %s with column %s\n",
+            		m_verticalPartitionMap.get(tableName.toLowerCase()), tableName,
+                        colName));
+        }
+
+        m_verticalPartitionMap.put(tableName.toLowerCase(), colName.toLowerCase());
+    }
+
+    void removeVerticalPartition(String tableName)
+    {
+    	m_verticalPartitionMap.remove(tableName);
     }
 
     /**

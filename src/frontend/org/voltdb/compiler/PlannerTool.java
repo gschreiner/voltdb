@@ -325,6 +325,7 @@ public class PlannerTool {
 
                 // If not caching or there was no cache hit, do the expensive full planning.
                 plan = planner.plan();
+                //TODO Daqui vem o ouro de particionamento
                 if (plan.getStatementPartitioning() != null) {
                     partitioning = plan.getStatementPartitioning();
                 }

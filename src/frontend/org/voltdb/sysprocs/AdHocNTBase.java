@@ -276,6 +276,8 @@ public abstract class AdHocNTBase extends UpdateApplicationBase {
         assert(sqlStatements != null);
 
         boolean inferSP = (sqlStatements.size() == 1) && inferPartitioning;
+        //TODO Alterar aqui para utilizar outro tipo de particionamento
+
 
         if (userParamSet != null && userParamSet.length > 0) {
             if (sqlStatements.size() != 1) {

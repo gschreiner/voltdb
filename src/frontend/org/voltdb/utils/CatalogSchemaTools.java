@@ -113,6 +113,7 @@ public abstract class CatalogSchemaTools {
         else {
             if (isExportOnly) {
                 table_sb.append("CREATE STREAM ").append(catalog_tbl.getTypeName());
+                //TODO: Passar a parte vertical para poder adic
                 if (streamPartitionColumn != null && viewQuery == null) {
                     table_sb.append(" PARTITION ON COLUMN ").append(streamPartitionColumn);
                 }
@@ -341,6 +342,13 @@ public abstract class CatalogSchemaTools {
         // Partition Table for regular tables (non-streams)
         if (catalog_tbl.getPartitioncolumn() != null && viewQuery == null && !isExportOnly) {
             sb.append("PARTITION TABLE ").append(catalog_tbl.getTypeName()).append(" ON COLUMN ").append(catalog_tbl.getPartitioncolumn().getTypeName()).append(";\n");
+        }
+        else if (catalog_tbl.getVerticalpartitioncolumns() != null && !catalog_tbl.getVerticalpartitioncolumns().isEmpty() && viewQuery == null && !isExportOnly) {
+        	String vercolumns = new String("");
+        	for (Column c : catalog_tbl.getVerticalpartitioncolumns())
+        		vercolumns+=c.getTypeName()+", ";
+
+        	sb.append("PARTITION VERTICAL TABLE ").append(catalog_tbl.getTypeName()).append(" ON COLUMN ").append(vercolumns.substring(0, vercolumns.length()-2)).append(";\n");
         }
 
         // All other Indexes
