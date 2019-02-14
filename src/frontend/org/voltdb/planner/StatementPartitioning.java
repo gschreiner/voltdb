@@ -110,6 +110,9 @@ public class StatementPartitioning implements Cloneable{
      * inferred from the analysis (suitable for hashinating).
      * If null, SP may not be safe, or the partitioning may be based on something less obvious like a parameter or constant expression.
      */
+    //For Vertical partition tables;
+    private Set<Column> m_verticalPartitionColForDML;
+
     private Object m_inferredValue = null;
     private int m_inferredParameterIndex = -1;
     /*
@@ -364,6 +367,23 @@ public class StatementPartitioning implements Cloneable{
     }
 
     /**
+     * accessor
+     * @param partitioncolumn
+     */
+    public void setVerticalPartitioningColumnForDML(Set<Column> partitioncolumns) {
+        if (m_inferPartitioning) {
+            m_verticalPartitionColForDML = partitioncolumns; // Not used in SELECT plans.
+        }
+    }
+
+    /**
+     * @return
+     */
+    public Set<Column>  getVerticalPartitionColForDML() {
+        return m_verticalPartitionColForDML;
+    }
+
+    /**
      * Accessor
      */
     public boolean isReplicatedDmlToRunOnAllPartitions() {
@@ -588,6 +608,7 @@ public class StatementPartitioning implements Cloneable{
         setJoinValid(true);
         setJoinInvalidReason(null);
         m_partitionColForDML = null;
+        m_verticalPartitionColForDML = new HashSet<Column>();
     }
 
 }
