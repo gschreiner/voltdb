@@ -224,7 +224,7 @@ public abstract class AbstractPlanNode implements JSONString, Comparable<Abstrac
     {
         // default behavior: just copy the input schema
         // to the output schema
-        assert(m_children.size() == 1);
+      //  assert(m_children.size() == 1);
         AbstractPlanNode childNode = m_children.get(0);
         childNode.generateOutputSchema(db);
         // Replace the expressions in our children's columns with TVEs.  When

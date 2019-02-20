@@ -120,7 +120,7 @@ public class InsertPlanNode extends AbstractOperationPlanNode {
     @Override
     public boolean isOrderDeterministic() {
         assert(m_children != null);
-        assert(m_children.size() == 1);
+       // assert(m_children.size() == 1);
 
         // This implementation is very close to AbstractPlanNode's implementation of this
         // method, except that we assert just one child.

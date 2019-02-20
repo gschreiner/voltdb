@@ -174,7 +174,7 @@ public abstract class AdHocNTBase extends UpdateApplicationBase {
      * Compile a batch of one or more SQL statements into a set of plans.
      * Parameters are valid iff there is exactly one DML/DQL statement.
      */
-    public static AdHocPlannedStatement compileAdHocSQL(PlannerTool plannerTool,
+    public static List<AdHocPlannedStatement> compileAdHocSQL(PlannerTool plannerTool,
                                                         String sqlStatement,
                                                         boolean inferPartitioning,
                                                         Object userPartitionKey,
@@ -184,6 +184,7 @@ public abstract class AdHocNTBase extends UpdateApplicationBase {
                                                         Object[] userParamSet)
                                                                 throws AdHocPlanningException
     {
+    	List<AdHocPlannedStatement> result = new ArrayList<>();
         assert(plannerTool != null);
         assert(sqlStatement != null);
         final PlannerTool ptool = plannerTool;
@@ -203,7 +204,7 @@ public abstract class AdHocNTBase extends UpdateApplicationBase {
         }
 
         try {
-            return ptool.planSql(sqlStatement,
+            result = ptool.hybridPlanSql(sqlStatement,
                                  partitioning,
                                  explainMode != ExplainMode.NONE,
                                  userParamSet,
@@ -248,6 +249,7 @@ public abstract class AdHocNTBase extends UpdateApplicationBase {
             adhocLog.error(msg + "\n" + stackTrace);
             throw new AdHocPlanningException(msg);
         }
+        return result;
     }
 
     /**
@@ -288,7 +290,7 @@ public abstract class AdHocNTBase extends UpdateApplicationBase {
 
         for (final String sqlStatement : sqlStatements) {
             try {
-                AdHocPlannedStatement result = compileAdHocSQL(context.m_ptool,
+                List<AdHocPlannedStatement> result = compileAdHocSQL(context.m_ptool,
                                                                sqlStatement,
                                                                inferSP,
                                                                userPartitionKey,
@@ -299,11 +301,12 @@ public abstract class AdHocNTBase extends UpdateApplicationBase {
                 // The planning tool may have optimized for the single partition case
                 // and generated a partition parameter.
                 if (inferSP) {
-                    partitionParamIndex = result.getPartitioningParameterIndex();
-                    partitionParamType = result.getPartitioningParameterType();
-                    partitionParamValue = result.getPartitioningParameterValue();
+                    partitionParamIndex = result.get(0).getPartitioningParameterIndex();
+                    partitionParamType = result.get(0).getPartitioningParameterType();
+                    partitionParamValue = result.get(0).getPartitioningParameterValue();
                 }
-                stmts.add(result);
+                result.forEach(c -> {stmts.add(c);});
+
             }
             catch (AdHocPlanningException e) {
                 errorMsgs.add(e.getMessage());
@@ -534,7 +537,7 @@ public abstract class AdHocNTBase extends UpdateApplicationBase {
         Object partitionKey = singlePartition ? "1" : null;
 
         List<AdHocPlannedStatement> stmts = new ArrayList<>();
-        AdHocPlannedStatement result = null;
+        List<AdHocPlannedStatement> result = null;
 
         result = compileAdHocSQL(ptool,
                                  sql,
@@ -544,7 +547,8 @@ public abstract class AdHocNTBase extends UpdateApplicationBase {
                                  false, // not a large query
                                  false, // not swap tables
                                  userParams);
-        stmts.add(result);
+        result.forEach(c -> stmts.add(c));
+
 
 
         return new AdHocPlannedStmtBatch(userParams,

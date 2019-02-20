@@ -112,6 +112,7 @@ public class StatementPartitioning implements Cloneable{
      */
     //For Vertical partition tables;
     private Set<Column> m_verticalPartitionColForDML;
+    private CompiledPlan m_verticalInsertComplement;
 
     private Object m_inferredValue = null;
     private int m_inferredParameterIndex = -1;
@@ -368,7 +369,7 @@ public class StatementPartitioning implements Cloneable{
 
     /**
      * accessor
-     * @param partitioncolumn
+     * @param partitionverticalcolumn
      */
     public void setVerticalPartitioningColumnForDML(Set<Column> partitioncolumns) {
         if (m_inferPartitioning) {
@@ -381,6 +382,23 @@ public class StatementPartitioning implements Cloneable{
      */
     public Set<Column>  getVerticalPartitionColForDML() {
         return m_verticalPartitionColForDML;
+    }
+
+    /**
+     * accessor
+     * @param partitionverticalcolumn
+     */
+    public void setVerticalPartitioningInsertPlan(CompiledPlan insertPlan) {
+        if (m_inferPartitioning) {
+            m_verticalInsertComplement = insertPlan; // Not used in SELECT plans.
+        }
+    }
+
+    /**
+     * @return
+     */
+    public CompiledPlan  getVerticalPartitioningInsertPlan() {
+        return m_verticalInsertComplement;
     }
 
     /**
@@ -609,6 +627,7 @@ public class StatementPartitioning implements Cloneable{
         setJoinInvalidReason(null);
         m_partitionColForDML = null;
         m_verticalPartitionColForDML = new HashSet<Column>();
+        m_verticalInsertComplement = null;
     }
 
 }
