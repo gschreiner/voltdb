@@ -64,6 +64,8 @@ public:
         : AbstractOperationPlanNode()
         , m_multiPartition(false)
         , m_fieldMap()
+		, m_horFieldMapTuple()
+        , m_vertFieldMapTuple()
         , m_isUpsert(false)
         , m_sourceIsPartitioned(false) {
     }
@@ -90,12 +92,18 @@ public:
 
     const std::vector<int>& getFieldMap() const { return m_fieldMap; }
 
+    const std::vector<int>& getHorFieldMapTuple() const { return m_horFieldMapTuple; }
+
+    const std::vector<int>& getVertFieldMapTuple() const { return m_vertFieldMapTuple; }
+
 protected:
     void loadFromJSONObject(PlannerDomValue obj);
 
 private:
     bool m_multiPartition;
     std::vector<int> m_fieldMap;
+    std::vector<int> m_horFieldMapTuple;
+    std::vector<int> m_vertFieldMapTuple;
     bool m_isUpsert;
     bool m_sourceIsPartitioned;
 };

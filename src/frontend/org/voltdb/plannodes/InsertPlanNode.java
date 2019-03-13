@@ -28,12 +28,16 @@ public class InsertPlanNode extends AbstractOperationPlanNode {
     private static class Members {
         static final String MULTI_PARTITION = "MULTI_PARTITION";
         static final String FIELD_MAP = "FIELD_MAP";
+        static final String HOR_FIELD_MAP_TUPLE = "HOR_FIELD_MAP_TUPLE";
+        static final String VERT_FIELD_MAP_TUPLE = "VERT_FIELD_MAP_TUPLE";
         static final String UPSERT = "UPSERT";
         static final String SOURCE_IS_PARTITIONED = "SOURCE_IS_PARTITIONED";
     }
 
     protected boolean m_multiPartition = false;
     private int[] m_fieldMap;
+    private int[] m_horFieldMapTuple;
+    private int[] m_vertFieldMapTuple;
 
     private boolean m_isUpsert = false;
     private boolean m_sourceIsPartitioned = false;
@@ -59,6 +63,14 @@ public class InsertPlanNode extends AbstractOperationPlanNode {
         m_multiPartition = multiPartition;
     }
 
+    public int[] getVertFieldMapTuple() {
+        return m_vertFieldMapTuple;
+    }
+
+    public void setVertFieldMapTuple(int[] vertFieldMap) {
+    	m_vertFieldMapTuple = vertFieldMap;
+    }
+
     public int[] getFieldMap() {
         return m_fieldMap;
     }
@@ -66,6 +78,15 @@ public class InsertPlanNode extends AbstractOperationPlanNode {
     public void setFieldMap(int[] fieldMap) {
         m_fieldMap = fieldMap;
     }
+
+    public int[] getHorFieldMapTuple() {
+        return m_horFieldMapTuple;
+    }
+
+    public void setHorFieldMapTuple(int[] horFieldMap) {
+    	m_horFieldMapTuple = horFieldMap;
+    }
+
 
     public void setSourceIsPartitioned(boolean value) {
         m_sourceIsPartitioned = value;
@@ -85,6 +106,11 @@ public class InsertPlanNode extends AbstractOperationPlanNode {
         super.toJSONString(stringer);
         stringer.keySymbolValuePair(Members.MULTI_PARTITION, m_multiPartition);
         toJSONIntArrayString(stringer, Members.FIELD_MAP, m_fieldMap);
+        if (m_horFieldMapTuple != null)
+        	toJSONIntArrayString(stringer, Members.HOR_FIELD_MAP_TUPLE, m_horFieldMapTuple);
+
+        if (m_vertFieldMapTuple != null)
+        	toJSONIntArrayString(stringer, Members.VERT_FIELD_MAP_TUPLE, m_vertFieldMapTuple);
 
         if (m_isUpsert) {
             stringer.keySymbolValuePair(Members.UPSERT, true);
@@ -100,6 +126,8 @@ public class InsertPlanNode extends AbstractOperationPlanNode {
         super.loadFromJSONObject(jobj, db);
         m_multiPartition = jobj.getBoolean(Members.MULTI_PARTITION);
         m_fieldMap = loadIntArrayMemberFromJSON(jobj, Members.FIELD_MAP);
+        m_horFieldMapTuple = loadIntArrayMemberFromJSON(jobj, Members.HOR_FIELD_MAP_TUPLE);
+        m_vertFieldMapTuple = loadIntArrayMemberFromJSON(jobj, Members.VERT_FIELD_MAP_TUPLE);
         m_isUpsert = jobj.has(Members.UPSERT);
         m_sourceIsPartitioned = jobj.has(Members.SOURCE_IS_PARTITIONED);
     }

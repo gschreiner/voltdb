@@ -2147,6 +2147,7 @@ bool VoltDBEngine::isLocalSite(const NValue& value) const {
 }
 
 int32_t VoltDBEngine::getPartitionForPkHash(const int32_t pkHash) const {
+	printf("\n\t ->chamou o getPartitionForPkHash no Engine\n");
     return m_hashinator->partitionForToken(pkHash);
 }
 

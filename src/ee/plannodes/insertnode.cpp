@@ -46,38 +46,47 @@
 
 namespace voltdb {
 
-PlanNodeType InsertPlanNode::getPlanNodeType() const { return PLAN_NODE_TYPE_INSERT; }
+PlanNodeType InsertPlanNode::getPlanNodeType() const {
+	return PLAN_NODE_TYPE_INSERT;
+}
 
-void InsertPlanNode::loadFromJSONObject(PlannerDomValue obj)
-{
-    AbstractOperationPlanNode::loadFromJSONObject(obj);
-    m_multiPartition = obj.valueForKey("MULTI_PARTITION").asBool();
-    if (obj.hasNonNullKey("FIELD_MAP")) {
-        PlannerDomValue fieldMap = obj.valueForKey("FIELD_MAP");
-        for (int i = 0; i < fieldMap.arrayLen(); ++i) {
-          m_fieldMap.push_back(fieldMap.valueAtIndex(i).asInt());
-        }
-    }
-    m_isUpsert = false;
-    if (obj.hasNonNullKey("UPSERT")) {
-        m_isUpsert = true;
-    }
-    m_sourceIsPartitioned = false;
-    if (obj.hasNonNullKey("SOURCE_IS_PARTITIONED")) {
-        m_sourceIsPartitioned = true;
-    }
+void InsertPlanNode::loadFromJSONObject(PlannerDomValue obj) {
+	AbstractOperationPlanNode::loadFromJSONObject(obj);
+	m_multiPartition = obj.valueForKey("MULTI_PARTITION").asBool();
+	if (obj.hasNonNullKey("FIELD_MAP")) {
+		PlannerDomValue fieldMap = obj.valueForKey("FIELD_MAP");
+		for (int i = 0; i < fieldMap.arrayLen(); ++i) {
+			m_fieldMap.push_back(fieldMap.valueAtIndex(i).asInt());
+		}
+	}
+	if (obj.hasNonNullKey("HOR_FIELD_MAP_TUPLE")) {
+		PlannerDomValue fieldMap = obj.valueForKey("HOR_FIELD_MAP_TUPLE");
+		for (int i = 0; i < fieldMap.arrayLen(); ++i) {
+			m_horFieldMapTuple.push_back(fieldMap.valueAtIndex(i).asInt());
+		}
+	}
+	if (obj.hasNonNullKey("VERT_FIELD_MAP_TUPLE")) {
+		PlannerDomValue fieldMap = obj.valueForKey("VERT_FIELD_MAP_TUPLE");
+		for (int i = 0; i < fieldMap.arrayLen(); ++i) {
+			m_vertFieldMapTuple.push_back(fieldMap.valueAtIndex(i).asInt());
+		}
+	}
+	m_isUpsert = false;
+	if (obj.hasNonNullKey("UPSERT")) {
+		m_isUpsert = true;
+	}
+	m_sourceIsPartitioned = false;
+	if (obj.hasNonNullKey("SOURCE_IS_PARTITIONED")) {
+		m_sourceIsPartitioned = true;
+	}
 }
 
 void InsertPlanNode::initTupleWithDefaultValues(VoltDBEngine* engine,
-                                                Pool *pool,
-                                                const std::set<int>& fieldsExplicitlySet,
-                                                TableTuple& templateTuple,
-                                                std::vector<int>& nowFields) {
-    m_tcd->initTupleWithDefaultValues(pool,
-                                      engine->getCatalogTable(getTargetTableName()),
-                                      fieldsExplicitlySet,
-                                      templateTuple,
-                                      nowFields);
+		Pool *pool, const std::set<int>& fieldsExplicitlySet,
+		TableTuple& templateTuple, std::vector<int>& nowFields) {
+	m_tcd->initTupleWithDefaultValues(pool,
+			engine->getCatalogTable(getTargetTableName()), fieldsExplicitlySet,
+			templateTuple, nowFields);
 }
 
 } // namespace voltdb

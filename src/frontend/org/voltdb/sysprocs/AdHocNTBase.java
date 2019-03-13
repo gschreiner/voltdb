@@ -470,6 +470,7 @@ public abstract class AdHocNTBase extends UpdateApplicationBase {
         // HSQL (or PostgreSQL) does not specifically implement AdHoc SP
         // -- instead, use its always-SP implementation of AdHoc
         boolean isSinglePartition = plannedStmtBatch.isSinglePartitionCompatible() || m_isConfiguredForNonVoltDBBackend;
+      //  boolean isSinglePartition = false;
 
         if (isSwapTables) {
             procedureName = "@SwapTablesCore";

@@ -540,6 +540,7 @@ public class PlannerTool {
 			//////////////////////
 			// OUTPUT THE RESULT
 			//////////////////////
+			int val = 1;
 			for (CompiledPlan plan : planList) {
 				CorePlan core = new CorePlan(plan, m_catalogHash);
 				AdHocPlannedStatement ahps = new AdHocPlannedStatement(plan, core);
@@ -553,8 +554,8 @@ public class PlannerTool {
 					// Either or both of these two values may simply default
 					// to -1 and to null, respectively.
 					//core.setPartitioningParamIndex(partitioning.getInferredParameterIndex());
-					core.setPartitioningParamIndex(partitioning.getInferredParameterIndex());
-					core.setPartitioningParamValue(partitioning.getInferredPartitioningValue());
+					core.setPartitioningParamIndex(0);
+					core.setPartitioningParamValue(val++);
 
 					assert (parsedToken != null);
 					// Again, plans with inferred partitioning are the only ones supported in the

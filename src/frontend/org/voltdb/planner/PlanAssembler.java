@@ -1703,14 +1703,11 @@ public class PlanAssembler {
 		CatalogMap<Column> targetTableColumns = targetTable.getColumns();
 
 		// We need to make shure that primary keys is in booth fragments
-		boolean hasPrimaryKey = false;
 		CatalogMap<ColumnRef> pkList = null;
 		for (Constraint constraint : targetTable.getConstraints()) {
 			if (constraint.getType() != ConstraintType.PRIMARY_KEY.getValue()) {
 				continue;
 			}
-
-			hasPrimaryKey = true;
 			if (!constraint.getIndex().getColumns().isEmpty())
 				pkList = constraint.getIndex().getColumns();
 		}
@@ -1761,15 +1758,18 @@ public class PlanAssembler {
 		NodeSchema matSchemaComp = null;
 		if (subquery == null) {
 			matSchema = new NodeSchema();
-			if (m_partitioning.getVerticalPartitionColForDML()!=null && !m_partitioning.getVerticalPartitionColForDML().isEmpty())
+			if (m_partitioning.getVerticalPartitionColForDML() != null
+					&& !m_partitioning.getVerticalPartitionColForDML().isEmpty())
 				matSchemaComp = new NodeSchema();
 		}
 
 		int firstFragmentSize = m_parsedInsert.m_columns.size() - vertI + (pkList != null ? pkList.size() : 0);
-
-		int[] fieldMap = new int[firstFragmentSize > m_parsedInsert.m_columns.size()? m_parsedInsert.m_columns.size() : firstFragmentSize ];
-		int[] fieldMapComp = new int[vertI];
-		int i = 0, ic = 0;
+		// int[] fieldMap = new int[firstFragmentSize > m_parsedInsert.m_columns.size()?
+		// m_parsedInsert.m_columns.size() : firstFragmentSize ];
+		int[] fieldMap = new int[m_parsedInsert.m_columns.size()];
+		int[] fieldMapHorTuple = new int[firstFragmentSize > m_parsedInsert.m_columns.size() ? m_parsedInsert.m_columns.size() : firstFragmentSize];
+		int[] fieldMapVerTuple = new int[vertI];
+		int i = 0, iVert = 0, iHor = 0;
 
 		// The insert statement's set of columns are contained in a LinkedHashMap,
 		// meaning that we'll iterate over the columns here in the order that the user
@@ -1780,23 +1780,36 @@ public class PlanAssembler {
 		// - For VERTICAL partition the modele creates two InsertNodes that need be
 		// executed in different sites in the same machine
 		for (Map.Entry<Column, AbstractExpression> e : m_parsedInsert.m_columns.entrySet()) {
+			boolean inVertical = false;
 			Column col = e.getKey();
-			boolean notInVertical = true;
-			if (verticalPartitionColumns.contains(col.getTypeName())) {
-				fieldMapComp[ic++] = col.getIndex();
-				notInVertical = false;
-				if (matSchemaComp != null) {
-					AbstractExpression valExpr = e.getValue();
-					valExpr.setInBytes(col.getInbytes());
 
-					valExpr = castExprIfNeeded(valExpr, col);
+			fieldMap[i] = col.getIndex();
 
-					matSchemaComp.addColumn(AbstractParsedStmt.TEMP_TABLE_NAME, AbstractParsedStmt.TEMP_TABLE_NAME,
-							col.getTypeName(), col.getTypeName(), valExpr);
-				}
-
+			if (matSchema != null) {
+				AbstractExpression valExpr = e.getValue();
+				valExpr.setInBytes(col.getInbytes());
+				valExpr = castExprIfNeeded(valExpr, col);
+				matSchema.addColumn(AbstractParsedStmt.TEMP_TABLE_NAME, AbstractParsedStmt.TEMP_TABLE_NAME,
+						col.getTypeName(), col.getTypeName(), valExpr);
 			}
 
+			if (verticalPartitionColumns.contains(col.getTypeName())) {
+				System.out.println(
+						" vERTICAL - Adicionada a COluna " + col.getTypeName() + " com indice " + col.getIndex());
+				fieldMapVerTuple[iVert++] = i;
+				inVertical = true;
+				// if (matSchemaComp != null) {
+				// AbstractExpression valExpr = e.getValue();
+				// valExpr.setInBytes(col.getInbytes());
+				//
+				// valExpr = castExprIfNeeded(valExpr, col);
+				//
+				// matSchemaComp.addColumn(AbstractParsedStmt.TEMP_TABLE_NAME,
+				// AbstractParsedStmt.TEMP_TABLE_NAME,
+				// col.getTypeName(), col.getTypeName(), valExpr);
+				// }
+
+			}
 			boolean isMandatory = false;
 			if (pkList != null) {
 				for (ColumnRef c : pkList) {
@@ -1806,26 +1819,13 @@ public class PlanAssembler {
 					}
 				}
 			}
-			if (notInVertical || isMandatory) {
 
-				fieldMap[i++] = col.getIndex();
-
-				if (matSchema != null) {
-					AbstractExpression valExpr = e.getValue();
-					valExpr.setInBytes(col.getInbytes());
-
-					// Patch over any mismatched expressions with an explicit cast.
-					// Most impossible-to-cast type combinations should have already been caught by
-					// the
-					// parser, but there are also runtime checks in the casting code
-					// -- such as for out of range values.
-					valExpr = castExprIfNeeded(valExpr, col);
-
-					matSchema.addColumn(AbstractParsedStmt.TEMP_TABLE_NAME, AbstractParsedStmt.TEMP_TABLE_NAME,
-							col.getTypeName(), col.getTypeName(), valExpr);
-
-				}
+			if (isMandatory || !inVertical) {
+				fieldMapHorTuple[iHor++] = i;
+				System.out.println(" hOR - Adicionada a COluna " + col.getTypeName() + " com indice " + col.getIndex());
 			}
+
+			i++;
 		}
 
 		// the root of the insert plan may be an InsertPlanNode, or
@@ -1839,7 +1839,7 @@ public class PlanAssembler {
 		// diferent nodes the insert node.
 
 		InsertPlanNode insertNode = new InsertPlanNode(m_parsedInsert.m_isUpsert);
-		InsertPlanNode insertNodeCom = null;
+		//InsertPlanNode insertNodeCom = null;
 		insertNode.setTargetTableName(targetTable.getTypeName());
 		if (subquery != null) {
 			insertNode.setSourceIsPartitioned(!subquery.getIsReplicated());
@@ -1850,17 +1850,19 @@ public class PlanAssembler {
 		// The field map tells the insert node
 		// where to put values produced by child into the row to be inserted.
 		insertNode.setFieldMap(fieldMap);
+		insertNode.setHorFieldMapTuple(fieldMapHorTuple);
+		insertNode.setVertFieldMapTuple(fieldMapVerTuple);
 
-		if (matSchemaComp != null) {
-			insertNodeCom = new InsertPlanNode(m_parsedInsert.m_isUpsert);
-			insertNodeCom.setTargetTableName(targetTable.getTypeName());
-			insertNodeCom.setFieldMap(fieldMapComp);
 
-			MaterializePlanNode matNode = new MaterializePlanNode(matSchemaComp);
-
-			// connect the insert and the materialize nodes together
-			insertNodeCom.addAndLinkChild(matNode);
-		}
+//		if (matSchemaComp != null) {
+//			insertNodeCom = new InsertPlanNode(m_parsedInsert.m_isUpsert);
+//			insertNodeCom.setTargetTableName(targetTable.getTypeName());
+//
+//			MaterializePlanNode matNode = new MaterializePlanNode(matSchemaComp);
+//
+//			// connect the insert and the materialize nodes together
+//			insertNodeCom.addAndLinkChild(matNode);
+//		}
 
 		if (matSchema != null) {
 			MaterializePlanNode matNode = new MaterializePlanNode(matSchema);
@@ -1904,14 +1906,29 @@ public class PlanAssembler {
 			// sendNode.addAndLinkChild(limitNode1);
 			// //sendNode.addAndLinkChild(limitNode);
 			// AbstractPlanNode plan = new PlanNodeTree(limitNode);
-			CompiledPlan vertPlan = new CompiledPlan(m_isLargeQuery);
-			vertPlan.setReadOnly(false);
-			vertPlan.statementGuaranteesDeterminism(false, true, isContentDeterministic);
-			vertPlan.rootPlanGraph = insertNodeCom;
-			m_partitioning.setVerticalPartitioningInsertPlan(vertPlan);
 
-			insertNode.setMultiPartition(false);
-			retval.rootPlanGraph = insertNode;
+			insertNode.setMultiPartition(true);
+		//	insertNode.addInlinePlanNode(insertNodeCom);
+			// insertNode.setSourceIsPartitioned(value);;
+			// insertNodeCom.setMultiPartition(true);
+
+			// CompiledPlan vertPlan = new CompiledPlan(m_isLargeQuery);
+			// vertPlan.setReadOnly(false);
+			// vertPlan.statementGuaranteesDeterminism(false, true, isContentDeterministic);
+			// vertPlan.rootPlanGraph = insertNodeCom;
+			// m_partitioning.setVerticalPartitioningInsertPlan(vertPlan);
+			//
+			// insertNode.setMultiPartition(false);
+
+			SendPlanNode sendNode = new SendPlanNode();
+			sendNode.addAndLinkChild(insertNode);
+
+			// insertNode.addInlinePlanNode(insertNodeCom);
+
+			ReceivePlanNode recvNode = new ReceivePlanNode();
+			recvNode.addAndLinkChild(sendNode);
+
+			retval.rootPlanGraph = recvNode;
 		} else {
 
 			insertNode.setMultiPartition(true);

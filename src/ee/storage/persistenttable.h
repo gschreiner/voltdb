@@ -445,12 +445,14 @@ public:
 
     int tupleLimit() const { return m_tupleLimit; }
 
-    bool isReplicatedTable() const { return (m_partitionColumn == -1); }
+    bool isReplicatedTable() const { return (m_partitionColumn <= -1); }
 
     bool isCatalogTableReplicated() const {
-        if (!m_isMaterialized && m_isReplicated != (m_partitionColumn == -1)) {
-            VOLT_ERROR("CAUTION: detected inconsistent isReplicate flag. Table name:%s\n", m_name.c_str());
-        }
+        // ORIGINAL IS if (!m_isMaterialized && m_isReplicated != (m_partitionColumn == -1)) {
+    	//TODO: G30 - IMPORTANT! Change to be able to detec vertical parition
+//        if (!m_isMaterialized && m_isReplicated != (m_partitionColumn <= -1)) {
+//            VOLT_ERROR("CAUTION: detected inconsistent isReplicate flag. Table name:%s\n", m_name.c_str());
+//        }
         return m_isReplicated;
     }
 
