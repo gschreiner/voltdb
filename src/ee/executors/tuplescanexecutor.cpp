@@ -66,7 +66,7 @@ bool TupleScanExecutor::p_execute(const NValueArray &params) {
     assert(output_table);
     AbstractTempTable* output_temp_table = dynamic_cast<AbstractTempTable*>(output_table);
     assert(output_temp_table);
-
+    printf("\nTuple SCAN! - %d\n", m_engine->getPartitionId());
     TableTuple temp_tuple = output_temp_table->tempTuple();
     const std::vector<int>& paramIdxs = node->getParamIdxs();
     assert(paramIdxs.size() == output_temp_table->schema()->columnCount());

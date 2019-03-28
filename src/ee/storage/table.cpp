@@ -465,6 +465,8 @@ void Table::loadTuplesFromNoHeader(SerializeInputBE &serialInput,
     int tupleCount = serialInput.readInt();
     assert(tupleCount >= 0);
 
+    printf("\n\n-> TuplesFromNoHeader\n");
+
     int32_t serializedTupleCount = 0;
     size_t tupleCountPosition = 0;
     TableTuple target(m_schema);
@@ -497,7 +499,7 @@ void Table::loadTuplesFrom(SerializeInputBE &serialInput,
      * [0y+5 .. end]
      * rowdata
      */
-
+	printf("\n\n-> CHamou Table %s", m_name.c_str());
     // todo: just skip ahead to this position
     serialInput.readInt(); // rowstart
 

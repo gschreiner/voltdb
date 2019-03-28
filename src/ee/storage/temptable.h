@@ -197,7 +197,6 @@ inline void TempTable::insertTempTuple(TableTuple &source) {
     //
     TableTuple target(m_schema);
     TempTable::nextFreeTuple(&target);
-
     //
     // Then copy the source into the target.
     // Any non-inlined variable-length data will have been allocated

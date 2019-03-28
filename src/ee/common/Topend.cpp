@@ -42,6 +42,7 @@ namespace voltdb {
 
     int DummyTopend::loadNextDependency(
         int32_t dependencyId, voltdb::Pool *pool, Table* destination) {
+    	printf("-> vv DESTINATION %d \n", dependencyId);
         return 0;
     }
 

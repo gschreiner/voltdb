@@ -93,6 +93,8 @@ void MergeReceiveExecutor::merge_sort(const std::vector<TableTuple>& tuples,
         return;
     }
 
+    printf("\n-> CHamou merge sort\n");
+
     size_t nonEmptyPartitions = partitionTupleCounts.size();
 
     // Vector to hold pairs of iterators denoting the range of tuples
@@ -165,6 +167,8 @@ bool MergeReceiveExecutor::p_init(AbstractPlanNode* abstract_node,
     VOLT_TRACE("init MergeReceive Executor");
     assert(!executorVector.isLargeQuery());
 
+    printf("\nTEMOS UM SHEROCK HOMES\n");
+
     MergeReceivePlanNode* merge_receive_node = dynamic_cast<MergeReceivePlanNode*>(abstract_node);
     assert(merge_receive_node != NULL);
 
@@ -219,6 +223,7 @@ bool MergeReceiveExecutor::p_execute(const NValueArray &params) {
     std::vector<int64_t> partitionTupleCounts;
     Table* inputTempTable = getPlanNode()->getInputTable();
     do {
+    	printf("\nMERGE!\n");
         loadedDeps = m_engine->loadNextDependency(inputTempTable);
         int64_t currentTupleCount = inputTempTable->activeTupleCount();
         if (currentTupleCount != previousTupleCount) {

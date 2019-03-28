@@ -453,6 +453,7 @@ void OptimizedProjector::optimize(const TupleSchema* dstSchema,
 }
 
 void OptimizedProjector::exec(TableTuple& dstTuple, const TableTuple& srcTuple) const {
+	printf("\n-> Chamou Otimizado!\n");
     BOOST_FOREACH(const ProjectStep& step, *m_steps) {
         step.exec(dstTuple, srcTuple);
     }

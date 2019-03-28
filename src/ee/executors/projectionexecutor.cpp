@@ -103,6 +103,7 @@ bool ProjectionExecutor::p_execute(const NValueArray &params) {
     assert (!node->isInline()); // inline projection's execute() should not be
                                 // called
     assert (m_outputTable == dynamic_cast<AbstractTempTable*>(node->getOutputTable()));
+    printf("\n\n\t CAMOU ESSE AMIGUINHO!\n\n");
     assert (m_outputTable);
     Table* input_table = m_abstractNode->getInputTable();
     assert (input_table);

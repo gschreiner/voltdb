@@ -1029,6 +1029,8 @@ int VoltDBIPC::loadNextDependency(int32_t dependencyId, voltdb::Pool *stringPool
     char* buf = retrieveDependency(dependencyId, &dependencySz);
     char *origBuf = buf;
 
+    printf("\n\n\t\t Load das tuplas propriamente dito!\n");
+
     if (!buf) {
         return 0;
     }

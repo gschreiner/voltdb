@@ -104,7 +104,7 @@ OrderByExecutor::p_execute(const NValueArray &params)
     assert(output_table);
     Table* input_table = node->getInputTable();
     assert(input_table);
-
+    printf("\nChamou o ORDER EXECUTOR!\n\n");
     //
     // OPTIMIZATION: NESTED LIMIT
     // How nice! We can also cut off our scanning with a nested limit!

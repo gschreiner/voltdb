@@ -72,9 +72,15 @@ bool ReceiveExecutor::p_execute(const NValueArray &params) {
 
     // todo: should pass the transaction's string pool through
     // as the underlying table loader would use it.
+    int rec = 0;
+    int32_t me = m_engine->getPartitionId();
+
+    printf("\n\t\t COORDENADOR: %d\n\n", me);
+
     do {
         loadedDeps =
         engine->loadNextDependency(output_table);
+        printf("-> Deu load! %d - %d\n", me, rec++);
     } while (loadedDeps > 0);
 
     return true;

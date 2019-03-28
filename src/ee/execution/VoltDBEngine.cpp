@@ -743,6 +743,7 @@ void VoltDBEngine::send(Table* dependency) {
 }
 
 int VoltDBEngine::loadNextDependency(Table* destination) {
+	printf("\n\n-> Receive !\n");
     return m_topend->loadNextDependency(m_currentInputDepId, &m_stringPool, destination);
 }
 

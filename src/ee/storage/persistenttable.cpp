@@ -819,6 +819,7 @@ void PersistentTable::doInsertTupleCommon(TableTuple& source, TableTuple& target
 
     }
 
+    	printf ("\nINSERINDO!\n");
     // Write to DR stream before everything else to ensure nothing gets left in
     // the index if the append fails.
     ExecutorContext* ec = ExecutorContext::getExecutorContext();

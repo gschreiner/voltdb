@@ -119,7 +119,7 @@ bool SeqScanExecutor::p_execute(const NValueArray &params) {
     SeqScanPlanNode* node = dynamic_cast<SeqScanPlanNode*>(m_abstractNode);
     assert(node);
 
-
+   // printf("\n-> ESSE SEQ É CHAMADO!\n");
     // Short-circuit an empty scan
     if (node->isEmptyScan()) {
         VOLT_DEBUG ("Empty Seq Scan :\n %s", node->getOutputTable()->debug().c_str());
@@ -251,6 +251,8 @@ bool SeqScanExecutor::p_execute(const NValueArray &params) {
             temp_tuple = m_tmpOutputTable->tempTuple();
         }
 
+       // int tuple_count = 0;
+       // int32_t me = m_engine->getPartitionId();
         while (postfilter.isUnderLimit() && iterator.next(tuple))
         {
 #if   defined(VOLT_TRACE_ENABLED)
@@ -261,7 +263,6 @@ bool SeqScanExecutor::p_execute(const NValueArray &params) {
                        ++tuple_ctr,
                        (int)input_table->activeTupleCount());
             pmp.countdownProgress();
-
             //
             // For each tuple we need to evaluate it against our predicate and limit/offset
             //
