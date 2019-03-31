@@ -1879,7 +1879,7 @@ public class PlanAssembler {
 			retval.rootPlanGraph = insertNode;
 			return retval;
 		}
-		if (!m_partitioning.getVerticalPartitionColForDML().isEmpty()) {
+		if (m_partitioning.getVerticalPartitionColForDML() != null && !m_partitioning.getVerticalPartitionColForDML().isEmpty()) {
 			// AbstractPlanNode rootIns1 = SubPlanAssembler.addSendReceivePair(insertNode);
 			// AbstractPlanNode rootIns2 =
 			// SubPlanAssembler.addSendReceivePair(insertNodeCom);
