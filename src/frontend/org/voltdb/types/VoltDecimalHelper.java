@@ -270,6 +270,7 @@ public class VoltDecimalHelper {
         if (decimal == null) {
             return null;
         }
+        decimal = decimal.replace(',', '.');
         BigDecimal bd = new BigDecimal(decimal);
         // if the scale is too large, check for trailing zeros
         if (bd.scale() > kDefaultScale) {
