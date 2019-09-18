@@ -26,6 +26,7 @@ import com.google_voltpatches.common.collect.ImmutableMap;
 public enum StartAction {
 
     CREATE("create", false, null),
+    WATCHER("watcher", false, "Operation Watcher "),
     RECOVER("recover", false, "Command Log Recovery"),
     SAFE_RECOVER("recover safemode", true, "Command Log Recovery"),
     REJOIN("rejoin", false, "K-Safety / Node Rejoin"),

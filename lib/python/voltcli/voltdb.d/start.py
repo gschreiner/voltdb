@@ -39,6 +39,7 @@ server_list_help = ('{hostname-or-ip[,...]}, '
         VOLT.StringOption('-D', '--dir', 'directory_spec', voltdbroot_help, default = None),
         VOLT.BooleanOption('-r', '--replica', 'replica', 'start replica cluster (deprecated, please use role="replica" in the deployment file)', default = False),
         VOLT.BooleanOption('-A', '--add', 'enableadd', 'allows the server to elastically expand the cluster if the cluster is already complete', default = False),
+        VOLT.BooleanOption('-W', '--watcher', 'watcher', 'sets up tha wacher for automatic data partition', default = False),
         VOLT.IntegerOption('-m', '--missing', 'missing', 'specifying how many nodes are missing at K-safe cluster startup'),
     ),
     description = 'Starts a database, which has been initialized.'

@@ -349,6 +349,12 @@ public class VoltDB {
 
         public Configuration(String args[]) {
             String arg;
+            System.out.print("Printing the arguments: \n");
+
+            for (int i=0; i < args.length; i++) {
+            	System.out.println("-> "+i+" - "+ args[i]);
+            }
+
             /*
              *  !!! D O  N O T  U S E  hostLog  T O  L O G ,  U S E  System.[out|err]  I N S T E A D
              */
@@ -552,6 +558,10 @@ public class VoltDB {
                 }
                 else if (arg.equals("create")) {
                     m_startAction = StartAction.CREATE;
+                }
+                else if (arg.equals("watcher")) {
+                    m_startAction = StartAction.WATCHER;
+                    System.out.println("\n---- The Wacher is setted!\n");
                 }
                 else if (arg.equals("recover")) {
                     m_startAction = StartAction.RECOVER;
